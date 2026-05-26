@@ -1,6 +1,6 @@
 //organigrama.jsx
 import { useEffect, useState } from "react";
-import { supabase } from "../../lib/supabaseClient.js";
+import { supabase } from "../../../lib/supabaseClient.js";
 import { ChevronDown, ChevronUp, Users, Layers, GitBranch } from "lucide-react";
 
 export default function Organigrama() {

@@ -1,33 +1,36 @@
+// src/components/Layout.jsx
 import { useState } from "react";
 import { Outlet, NavLink } from "react-router-dom";
 import {
   User,
   LayoutDashboard,
   Users,
-  BookOpen,
-  ClipboardList,
-  List,
-  Grid3X3,
+  BookCheck,
+  Grid,
   Network,
   ChevronLeft,
   ChevronRight,
   Menu,
   X,
   ShieldCheck,
-  BarChart3,
+  LogOut,
+  Briefcase,
+  Award,
+  Upload,
 } from "lucide-react";
+import { useAuth } from "../AuthContext.jsx";
 
 const menuItems = [
   { path: "/perfil", label: "Mi Perfil", icon: User },
   { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { path: "/empleados", label: "Empleados", icon: Users },
-  { path: "/cursos", label: "Cursos", icon: BookOpen },
-  { path: "/asignaciones", label: "Asignaciones", icon: ClipboardList },
-  { path: "/listas", label: "Listas", icon: List },
-  { path: "/matriz", label: "Matriz", icon: Grid3X3 },
+  { path: "/puestos", label: "Puestos", icon: Briefcase },
+  { path: "/capacitaciones", label: "Capacitaciones", icon: BookCheck },
+  { path: "/matriz-puesto", label: "Matriz por Puesto", icon: Grid },
   { path: "/organigrama", label: "Organigrama", icon: Network },
   { path: "/revision-calificaciones", label: "Calificaciones", icon: ShieldCheck },
-  { path: "/dashboard-calificaciones", label: "Dashboard Calif.", icon: BarChart3 },
+  { path: "/calificacion-anual", label: "Eval. Anual F-124", icon: Award },
+  { path: "/cargas-masivas", label: "Cargas Masivas", icon: Upload },
 ];
 function GeneticaLogo({ collapsed }) {
   return (
@@ -67,6 +70,7 @@ function GeneticaLogo({ collapsed }) {
 }
 
 export default function Layout() {
+  const { user, logout } = useAuth();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
@@ -203,8 +207,8 @@ export default function Layout() {
           </button>
         </div>
 
-        {/* User Info */}
-        {!isCollapsed && (
+        {/* User Info + Logout */}
+        {!isCollapsed && user && (
           <div
             style={{
               padding: "16px",
@@ -212,7 +216,7 @@ export default function Layout() {
               backgroundColor: "rgba(91,33,182,0.5)",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
               <div
                 style={{
                   width: 36,
@@ -226,19 +230,83 @@ export default function Layout() {
                   fontSize: 11,
                   fontWeight: 700,
                   boxShadow: "0 2px 8px rgba(236,72,153,0.3)",
+                  flexShrink: 0,
                 }}
               >
-                RM
+                {user.nombre?.split(" ").slice(0, 2).map((w) => w[0]).join("")}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 12, fontWeight: 500, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  Roberto Méndez
+                  {user.nombre}
                 </div>
                 <div style={{ fontSize: 10, color: "#a78bfa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  Gerente de Planta
+                  ID: {user.id}
                 </div>
               </div>
             </div>
+            <button
+              onClick={logout}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                padding: "8px",
+                backgroundColor: "rgba(239,68,68,0.15)",
+                color: "#fca5a5",
+                border: "1px solid rgba(239,68,68,0.3)",
+                borderRadius: 8,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+                transition: "all 0.2s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = "#ef4444";
+                e.currentTarget.style.color = "#fff";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = "rgba(239,68,68,0.15)";
+                e.currentTarget.style.color = "#fca5a5";
+              }}
+            >
+              <LogOut size={13} />
+              Cerrar Sesión
+            </button>
+          </div>
+        )}
+
+        {/* Logout compacto cuando sidebar está colapsado */}
+        {isCollapsed && user && (
+          <div style={{ padding: "8px", borderTop: "1px solid rgba(167,139,250,0.2)" }}>
+            <button
+              onClick={logout}
+              title="Cerrar Sesión"
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "10px",
+                backgroundColor: "rgba(239,68,68,0.15)",
+                color: "#fca5a5",
+                border: "1px solid rgba(239,68,68,0.3)",
+                borderRadius: 8,
+                cursor: "pointer",
+                transition: "all 0.2s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = "#ef4444";
+                e.currentTarget.style.color = "#fff";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = "rgba(239,68,68,0.15)";
+                e.currentTarget.style.color = "#fca5a5";
+              }}
+            >
+              <LogOut size={16} />
+            </button>
           </div>
         )}
       </aside>

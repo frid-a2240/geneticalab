@@ -1,6 +1,6 @@
 //MiPerfil.jsx
 import { useEffect, useState } from "react";
-import { supabase } from "../../lib/supabaseClient.js";
+import { supabase } from "../../../lib/supabaseClient.js";
 import { Briefcase, Calendar, BookOpen, CheckCircle, Clock, Award, TrendingUp } from "lucide-react";
 
 export default function MiPerfil() {

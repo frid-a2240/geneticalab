@@ -1,6 +1,6 @@
 //dashboard.jsx
 import { useEffect, useState } from "react";
-import { supabase } from "../../lib/supabaseClient.js";
+import { supabase } from "../../../lib/supabaseClient.js";
 import { Users, BookOpen, ClipboardCheck, TrendingUp, CheckCircle } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
