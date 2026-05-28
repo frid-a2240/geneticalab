@@ -20,63 +20,82 @@ export default function Dashboard() {
   useEffect(() => { fetchDashboard(); }, []);
 
   async function fetchDashboard() {
-    setLoading(true);
-    try {
-      const [empRes, curRes, capRes, asigRes] = await Promise.all([
-        supabase.from("empleados").select("clave", { count: "exact", head: true }),
-        supabase.from("cursos").select("id", { count: "exact", head: true }),
-        supabase.from("capacitaciones").select("id", { count: "exact", head: true }),
-        supabase.from("asignaciones_cap").select("emp_clave", { count: "exact", head: true }).eq("cap_eliminada", false),
-      ]);
-      setStats({ empleados: empRes.count || 0, cursos: curRes.count || 0, capacitaciones: capRes.count || 0, asignaciones: asigRes.count || 0 });
+  setLoading(true);
+  try {
+    const [empRes, curRes, capRes, asigRes] = await Promise.all([
+      supabase.from("empleados").select("clave", { count: "exact", head: true }),
+      supabase.from("cursos").select("id", { count: "exact", head: true }),
+      supabase.from("capacitaciones").select("id", { count: "exact", head: true }),
+      supabase.from("matriz_empleado").select("emp_clave", { count: "exact", head: true }).eq("cap_eliminada", false),
+    ]);
+    setStats({
+      empleados: empRes.count || 0,
+      cursos: curRes.count || 0,
+      capacitaciones: capRes.count || 0,
+      asignaciones: asigRes.count || 0,
+    });
 
-      const { data: allCaps } = await supabase
-        .from("asignaciones_cap")
-        .select("*, capacitaciones ( nombre, curso_id, cursos ( nombre, categoria ) )")
-        .eq("cap_eliminada", false);
-      const { data: allEmps } = await supabase.from("empleados").select("clave, nombre, depto");
+    const { data: allCaps } = await supabase
+      .from("matriz_empleado")
+      .select("*, empleados(clave, nombre, depto)")
+      .eq("cap_eliminada", false)
+      .range(0, 49999);
 
-      const empMap = {};
-      (allEmps || []).forEach((e) => (empMap[e.clave] = e));
+    const { data: allEmps } = await supabase
+      .from("empleados")
+      .select("clave, nombre, depto");
 
-      const deptoMap = {};
-      (allCaps || []).forEach((a) => {
-        const depto = empMap[a.emp_clave]?.depto || "Sin depto";
-        if (!deptoMap[depto]) deptoMap[depto] = { total: 0, completadas: 0 };
-        deptoMap[depto].total++;
-        if (a.completado) deptoMap[depto].completadas++;
-      });
-      setPorDepto(Object.entries(deptoMap).map(([name, d]) => ({
-        depto: name.length > 14 ? name.slice(0, 12) + "…" : name,
-        avance: d.total > 0 ? Math.round((d.completadas / d.total) * 100) : 0,
-      })));
+    const empMap = {};
+    (allEmps || []).forEach((e) => (empMap[e.clave] = e));
 
-      const grupoMap = {};
-      (allCaps || []).forEach((a) => {
-        const grupo = a.capacitaciones?.cursos?.nombre || "Sin grupo";
-        if (!grupoMap[grupo]) grupoMap[grupo] = { total: 0, completadas: 0 };
-        grupoMap[grupo].total++;
-        if (a.completado) grupoMap[grupo].completadas++;
-      });
-      setPorGrupo(Object.entries(grupoMap).map(([name, d], i) => ({
-        name, completadas: d.completadas, total: d.total, fill: COLORS[i % COLORS.length],
-      })));
+    const deptoMap = {};
+    (allCaps || []).forEach((a) => {
+      const depto = a.empleados?.depto || "Sin depto";
+      if (!deptoMap[depto]) deptoMap[depto] = { total: 0, completadas: 0 };
+      deptoMap[depto].total++;
+      if (a.completado) deptoMap[depto].completadas++;
+    });
+    setPorDepto(Object.entries(deptoMap).map(([name, d]) => ({
+      depto: name.length > 14 ? name.slice(0, 12) + "…" : name,
+      avance: d.total > 0 ? Math.round((d.completadas / d.total) * 100) : 0,
+    })));
 
-      const completados = (allCaps || []).filter((a) => a.completado).length;
-      const pendientes = (allCaps || []).filter((a) => !a.completado).length;
-      setPorEstado([
-        { name: "Completados", value: completados, color: "#10b981" },
-        { name: "Pendientes", value: pendientes, color: "#7c3aed" },
-      ]);
+    // Por grupo — usando codigo_cap_snap como agrupador
+    const grupoMap = {};
+    (allCaps || []).forEach((a) => {
+      const grupo = a.nombre_cap_snap?.split(" ").slice(0, 3).join(" ") || "Sin grupo";
+      if (!grupoMap[grupo]) grupoMap[grupo] = { total: 0, completadas: 0 };
+      grupoMap[grupo].total++;
+      if (a.completado) grupoMap[grupo].completadas++;
+    });
+    setPorGrupo(Object.entries(grupoMap).slice(0, 8).map(([name, d], i) => ({
+      name: name.length > 20 ? name.slice(0, 18) + "…" : name,
+      completadas: d.completadas,
+      total: d.total,
+      fill: COLORS[i % COLORS.length],
+    })));
 
-      setRecientes((allCaps || []).filter((a) => a.completado).slice(-6).reverse().map((a) => ({
-        empleado: empMap[a.emp_clave]?.nombre || a.emp_clave,
-        accion: a.nombre_cap_snap || a.capacitaciones?.nombre,
-        mes: a.mes,
-      })));
-    } catch (err) { console.error(err); }
-    setLoading(false);
-  }
+    const completados = (allCaps || []).filter((a) => a.completado).length;
+    const pendientes  = (allCaps || []).filter((a) => !a.completado).length;
+    setPorEstado([
+      { name: "Completados", value: completados, color: "#10b981" },
+      { name: "Pendientes",  value: pendientes,  color: "#7c3aed" },
+    ]);
+
+    setRecientes(
+      (allCaps || [])
+        .filter((a) => a.completado && a.fecha_capacitacion)
+        .sort((a, b) => b.fecha_capacitacion.localeCompare(a.fecha_capacitacion))
+        .slice(0, 6)
+        .map((a) => ({
+          empleado: a.empleados?.nombre || a.emp_clave,
+          accion: a.nombre_cap_snap,
+          mes: a.fecha_capacitacion?.slice(0, 7) || "",
+        }))
+    );
+  } catch (err) { console.error(err); }
+  setLoading(false);
+}
 
   if (loading) {
     return (
