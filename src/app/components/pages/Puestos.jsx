@@ -1,31 +1,16 @@
 // src/components/pages/Puestos.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { supabase } from "../../../lib/supabaseClient.js";
 import {
   Search, Plus, Briefcase, Building2, X,
-  AlertCircle, Edit, Trash2, ChevronDown, Users,
+  AlertCircle, Edit, Trash2, ChevronDown, Users, BookCheck,
 } from "lucide-react";
 
 const DEPTOS = [
-  "Fabricación",
-  "Acondicionamiento",
-  "Control De Calidad",
-  "Aseguramiento De Calidad",
-  "Validación",
-  "Sistema De Calidad",
-  "Desarrollo",
-  "Mantenimiento",
-  "Logística",
-  "Almacén",
-  "Recursos Humanos",
-  "Seguridad E Higiene",
-  "Contraloría",
-  "Dirección",
-  "Ventas",
-  "Ingeniería De Empaque",
-  "Compras",
-  "Auditoría",
-  "Otros",
+  "Fabricación", "Acondicionamiento", "Control De Calidad", "Aseguramiento De Calidad",
+  "Validación", "Sistema De Calidad", "Desarrollo", "Mantenimiento", "Logística",
+  "Almacén", "Recursos Humanos", "Seguridad E Higiene", "Contraloría", "Dirección",
+  "Ventas", "Ingeniería De Empaque", "Compras", "Auditoría", "Otros",
 ];
 
 const DEPTO_COLORS = {
@@ -52,7 +37,6 @@ const DEPTO_COLORS = {
 
 function getDeptoStyle(depto) {
   if (!depto) return { color: "#94a3b8", bg: "#f8fafc" };
-  // Buscar coincidencia parcial
   const key = Object.keys(DEPTO_COLORS).find(k =>
     depto.toLowerCase().includes(k.toLowerCase()) ||
     k.toLowerCase().includes(depto.toLowerCase())
@@ -76,19 +60,29 @@ export default function Puestos() {
     nombre: "", departamento: "", descripcion: "", activo: true,
   });
 
+  const [allCaps, setAllCaps] = useState([]);
+  const [puestoCaps, setPuestoCaps] = useState([]);
+  const [capsToAdd, setCapsToAdd] = useState([]);
+  const [capsToRemove, setCapsToRemove] = useState([]);
+  const [loadingCaps, setLoadingCaps] = useState(false);
+
+  // ====== NUEVO: estado del buscador de capacitaciones ======
+  const [capSearch, setCapSearch] = useState("");
+  const [showCapDropdown, setShowCapDropdown] = useState(false);
+  const capSearchRef = useRef(null);
+
   useEffect(() => { fetchData(); }, []);
 
   async function fetchData() {
     setLoading(true);
-    const [puestosRes, empsRes] = await Promise.all([
+    const [puestosRes, empsRes, capsRes] = await Promise.all([
       supabase.from("puestos").select("*").order("nombre"),
       supabase.from("empleados").select("puesto_id").eq("activo", true),
+      supabase.from("capacitaciones").select("id, nombre, codigo").order("nombre"),
     ]);
-
     const lista = puestosRes.data || [];
     setPuestos(lista);
-
-    // Contar empleados por puesto
+    setAllCaps(capsRes.data || []);
     const counts = {};
     (empsRes.data || []).forEach(e => {
       if (e.puesto_id) counts[e.puesto_id] = (counts[e.puesto_id] || 0) + 1;
@@ -97,9 +91,23 @@ export default function Puestos() {
     setLoading(false);
   }
 
+  async function loadPuestoCaps(puestoId) {
+    setLoadingCaps(true);
+    const { data } = await supabase
+      .from("matriz_puesto")
+      .select("id, capacitacion_id, capacitaciones(id, nombre, codigo)")
+      .eq("puesto_id", puestoId);
+    setPuestoCaps(data || []);
+    setCapsToAdd([]);
+    setCapsToRemove([]);
+    setLoadingCaps(false);
+  }
+
   function openCreate() {
     setEditingId(null);
     setForm({ nombre: "", departamento: DEPTOS[0], descripcion: "", activo: true });
+    setPuestoCaps([]); setCapsToAdd([]); setCapsToRemove([]);
+    setCapSearch(""); setShowCapDropdown(false);
     setErrorMsg("");
     setShowModal(true);
   }
@@ -112,9 +120,62 @@ export default function Puestos() {
       descripcion: p.descripcion || "",
       activo: p.activo !== false,
     });
+    setCapSearch(""); setShowCapDropdown(false);
     setErrorMsg("");
     setShowModal(true);
+    loadPuestoCaps(p.id);
   }
+
+  // ====== NUEVO: agregar cap desde el buscador ======
+  function handleAddCapFromSearch(cap) {
+    const yaEsta = puestoCaps.some(pc => pc.capacitacion_id === cap.id && !capsToRemove.includes(pc.id))
+      || capsToAdd.some(c => c.id === cap.id);
+    if (yaEsta) return;
+    setCapsToAdd([...capsToAdd, cap]);
+    setCapSearch("");
+    setShowCapDropdown(false);
+    // Volver a enfocar input para seguir buscando
+    setTimeout(() => capSearchRef.current?.focus(), 50);
+  }
+
+  function handleRemoveCapLocal(item) {
+    if (item.matriz_id) {
+      setCapsToRemove([...capsToRemove, item.matriz_id]);
+    } else {
+      setCapsToAdd(capsToAdd.filter(c => c.id !== item.cap_id));
+    }
+  }
+
+  const capsParaMostrar = [
+    ...puestoCaps
+      .filter(pc => !capsToRemove.includes(pc.id))
+      .map(pc => ({
+        matriz_id: pc.id, cap_id: pc.capacitacion_id,
+        nombre: pc.capacitaciones?.nombre, codigo: pc.capacitaciones?.codigo,
+        esNueva: false,
+      })),
+    ...capsToAdd.map(c => ({
+      matriz_id: null, cap_id: c.id,
+      nombre: c.nombre, codigo: c.codigo, esNueva: true,
+    })),
+  ];
+
+  // Filtro de búsqueda — exclude las ya agregadas
+  const capsBusquedaResultado = useMemo(() => {
+    if (!capSearch.trim()) return [];
+    const q = capSearch.toLowerCase();
+    const yaAsignadasIds = new Set([
+      ...puestoCaps.filter(pc => !capsToRemove.includes(pc.id)).map(pc => pc.capacitacion_id),
+      ...capsToAdd.map(c => c.id),
+    ]);
+    return allCaps
+      .filter(c => !yaAsignadasIds.has(c.id))
+      .filter(c =>
+        (c.nombre || "").toLowerCase().includes(q) ||
+        (c.codigo || "").toLowerCase().includes(q)
+      )
+      .slice(0, 20); // máximo 20 resultados
+  }, [capSearch, allCaps, puestoCaps, capsToAdd, capsToRemove]);
 
   async function handleSave() {
     setErrorMsg("");
@@ -129,17 +190,88 @@ export default function Puestos() {
       activo: form.activo,
     };
 
-    let error;
-    if (editingId) {
-      ({ error } = await supabase.from("puestos").update(payload).eq("id", editingId));
-    } else {
-      ({ error } = await supabase.from("puestos").insert(payload));
-    }
+    try {
+      let puestoIdFinal = editingId;
 
-    if (error) { setErrorMsg("Error: " + error.message); setSaving(false); return; }
-    setShowModal(false);
-    setSaving(false);
-    fetchData();
+      if (editingId) {
+        const { error } = await supabase.from("puestos").update(payload).eq("id", editingId);
+        if (error) throw new Error("Error al actualizar puesto: " + error.message);
+      } else {
+        const { data, error } = await supabase.from("puestos").insert(payload).select().single();
+        if (error) throw new Error("Error al crear puesto: " + error.message);
+        puestoIdFinal = data.id;
+      }
+
+      if (editingId) {
+        if (capsToRemove.length > 0) {
+          const capsRemovidas = puestoCaps
+            .filter(pc => capsToRemove.includes(pc.id))
+            .map(pc => pc.capacitacion_id);
+
+          const { error: errDel } = await supabase
+            .from("matriz_puesto").delete().in("id", capsToRemove);
+          if (errDel) throw new Error("Error al quitar caps: " + errDel.message);
+
+          if (capsRemovidas.length > 0) {
+            const { data: emps } = await supabase
+              .from("empleados").select("clave").eq("puesto_id", puestoIdFinal);
+            const claves = (emps || []).map(e => e.clave);
+            if (claves.length > 0) {
+              const { error: errDelCalif } = await supabase
+                .from("calificaciones").delete()
+                .in("emp_clave", claves)
+                .in("capacitacion_id", capsRemovidas)
+                .eq("completado", false)
+                .eq("origen", "puesto")
+                .eq("puesto_id_origen", puestoIdFinal);
+              if (errDelCalif) throw new Error("Error al borrar pendientes: " + errDelCalif.message);
+            }
+          }
+        }
+
+        if (capsToAdd.length > 0) {
+          const inserts = capsToAdd.map(c => ({
+            puesto_id: puestoIdFinal,
+            capacitacion_id: c.id,
+            obligatoria: true,
+          }));
+          const { error: errIns } = await supabase.from("matriz_puesto").insert(inserts);
+          if (errIns) throw new Error("Error al agregar caps: " + errIns.message);
+
+          const { data: emps } = await supabase
+            .from("empleados").select("clave").eq("puesto_id", puestoIdFinal).eq("activo", true);
+
+          if (emps && emps.length > 0) {
+            const califInserts = [];
+            for (const emp of emps) {
+              for (const cap of capsToAdd) {
+                califInserts.push({
+                  emp_clave: emp.clave,
+                  capacitacion_id: cap.id,
+                  nombre_capacitacion: cap.nombre,
+                  codigo_capacitacion: cap.codigo || "",
+                  completado: false,
+                  origen: "puesto",
+                  puesto_id_origen: puestoIdFinal,
+                  activa: true,
+                });
+              }
+            }
+            if (califInserts.length > 0) {
+              const { error: errCalif } = await supabase.from("calificaciones").insert(califInserts);
+              if (errCalif) throw new Error("Error al replicar a empleados: " + errCalif.message);
+            }
+          }
+        }
+      }
+
+      setShowModal(false);
+      setSaving(false);
+      fetchData();
+    } catch (err) {
+      setErrorMsg(err.message);
+      setSaving(false);
+    }
   }
 
   async function handleDelete(p) {
@@ -158,7 +290,6 @@ export default function Puestos() {
     fetchData();
   }
 
-  // Deptos únicos en los datos
   const deptosEnDatos = ["Todos", ...new Set(puestos.map(p => p.departamento).filter(Boolean).sort())];
 
   const filtered = puestos.filter(p => {
@@ -168,7 +299,6 @@ export default function Puestos() {
     return matchSearch && matchDepto;
   });
 
-  // Agrupar por departamento para la vista
   const grouped = filtered.reduce((acc, p) => {
     const d = p.departamento || "Sin Departamento";
     if (!acc[d]) acc[d] = [];
@@ -192,8 +322,6 @@ export default function Puestos() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-
-      {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700, color: "#1e1b4b", margin: 0 }}>Puestos</h1>
@@ -206,7 +334,6 @@ export default function Puestos() {
         </button>
       </div>
 
-      {/* Stat cards por depto */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px,1fr))", gap: 12 }}>
         {Object.entries(grouped).slice(0, 6).map(([depto, list]) => {
           const s = getDeptoStyle(depto);
@@ -214,8 +341,7 @@ export default function Puestos() {
           return (
             <div key={depto} style={{
               ...cardBase, padding: "16px",
-              borderLeft: `4px solid ${s.color}`,
-              cursor: "pointer",
+              borderLeft: `4px solid ${s.color}`, cursor: "pointer",
             }} onClick={() => setFilterDepto(depto === filterDepto ? "Todos" : depto)}>
               <p style={{ fontSize: 11, fontWeight: 700, color: s.color, margin: 0, textTransform: "uppercase", letterSpacing: "0.05em" }}>
                 {depto.length > 18 ? depto.slice(0, 16) + "…" : depto}
@@ -227,7 +353,6 @@ export default function Puestos() {
         })}
       </div>
 
-      {/* Filtros */}
       <div style={{ ...cardBase, padding: 20 }}>
         <div style={{ position: "relative", marginBottom: 16 }}>
           <Search size={18} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }} />
@@ -249,12 +374,10 @@ export default function Puestos() {
         </div>
       </div>
 
-      {/* Lista agrupada por departamento */}
       {Object.entries(grouped).map(([depto, lista]) => {
         const s = getDeptoStyle(depto);
         return (
           <div key={depto}>
-            {/* Encabezado departamento */}
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
               <div style={{ width: 12, height: 12, borderRadius: "50%", backgroundColor: s.color }} />
               <h2 style={{ fontSize: 14, fontWeight: 700, color: "#1e1b4b", margin: 0 }}>{depto}</h2>
@@ -265,7 +388,6 @@ export default function Puestos() {
               <div style={{ flex: 1, height: 1, backgroundColor: "#e5e7eb" }} />
             </div>
 
-            {/* Cards de puestos */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))", gap: 12, marginBottom: 8 }}>
               {lista.map(p => {
                 const empCnt = empCount[p.id] || 0;
@@ -277,9 +399,7 @@ export default function Puestos() {
                     transition: "transform 0.15s, box-shadow 0.15s",
                   }}
                     onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 6px 20px rgba(0,0,0,0.08)"; }}
-                    onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 1px 4px rgba(0,0,0,0.06)"; }}
-                  >
-                    {/* Top row */}
+                    onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 1px 4px rgba(0,0,0,0.06)"; }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                       <div style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
                         <p style={{ fontSize: 14, fontWeight: 700, color: "#1e1b4b", margin: 0, lineHeight: 1.3 }}>
@@ -291,7 +411,6 @@ export default function Puestos() {
                           </p>
                         )}
                       </div>
-                      {/* Badge activo/inactivo */}
                       <span style={{
                         fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 999, flexShrink: 0,
                         backgroundColor: p.activo !== false ? "#dcfce7" : "#f1f5f9",
@@ -301,7 +420,6 @@ export default function Puestos() {
                       </span>
                     </div>
 
-                    {/* Empleados count */}
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
                       <Users size={12} color="#94a3b8" />
                       <span style={{ fontSize: 12, color: "#64748b" }}>
@@ -309,7 +427,6 @@ export default function Puestos() {
                       </span>
                     </div>
 
-                    {/* Actions */}
                     <div style={{ display: "flex", gap: 6, paddingTop: 10, borderTop: "1px solid #f1f5f9" }}>
                       <button onClick={() => openEdit(p)} style={btnIcon("#7c3aed")}>
                         <Edit size={12} /><span>Editar</span>
@@ -336,7 +453,6 @@ export default function Puestos() {
         </div>
       )}
 
-      {/* ====== MODAL ====== */}
       {showModal && (
         <ModalShell title={editingId ? "Editar Puesto" : "Nuevo Puesto"} onClose={() => setShowModal(false)}>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -377,6 +493,172 @@ export default function Puestos() {
               </label>
             </div>
 
+            {/* ====== Capacitaciones del puesto (con BUSCADOR nuevo) ====== */}
+            {editingId && (
+              <div style={{
+                marginTop: 8, padding: 16, borderRadius: 12,
+                backgroundColor: "#faf8ff", border: "1px solid #e9e5ff",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                  <BookCheck size={16} color="#7c3aed" />
+                  <h4 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#1e1b4b" }}>
+                    Capacitaciones de este puesto
+                  </h4>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 999,
+                    backgroundColor: "#7c3aed", color: "#fff",
+                  }}>{capsParaMostrar.length}</span>
+                </div>
+
+                {/* ====== BUSCADOR con autocomplete ====== */}
+                <div style={{ position: "relative", marginBottom: 10 }}>
+                  <Search size={15} style={{
+                    position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)",
+                    color: "#94a3b8", zIndex: 1,
+                  }} />
+                  <input
+                    ref={capSearchRef}
+                    type="text"
+                    value={capSearch}
+                    onChange={e => { setCapSearch(e.target.value); setShowCapDropdown(true); }}
+                    onFocus={() => setShowCapDropdown(true)}
+                    onBlur={() => setTimeout(() => setShowCapDropdown(false), 200)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter" && capsBusquedaResultado.length > 0) {
+                        e.preventDefault();
+                        handleAddCapFromSearch(capsBusquedaResultado[0]);
+                      } else if (e.key === "Escape") {
+                        setCapSearch(""); setShowCapDropdown(false);
+                      }
+                    }}
+                    placeholder="Escribe código o nombre para buscar capacitación..."
+                    style={{
+                      width: "100%", paddingLeft: 36, paddingRight: 36, paddingTop: 9, paddingBottom: 9,
+                      backgroundColor: "#fff", border: "2px solid #e5e7eb",
+                      borderRadius: 10, fontSize: 12, outline: "none", boxSizing: "border-box",
+                    }}
+                  />
+                  {capSearch && (
+                    <button type="button"
+                      onClick={() => { setCapSearch(""); capSearchRef.current?.focus(); }}
+                      style={{
+                        position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
+                        background: "none", border: "none", cursor: "pointer", padding: 2,
+                      }}>
+                      <X size={14} color="#94a3b8" />
+                    </button>
+                  )}
+
+                  {/* Dropdown de resultados */}
+                  {showCapDropdown && capSearch.trim() && (
+                    <div style={{
+                      position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 50,
+                      backgroundColor: "#fff", borderRadius: 10,
+                      border: "1px solid #e5e7eb",
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+                      maxHeight: 240, overflowY: "auto",
+                    }}>
+                      {capsBusquedaResultado.length === 0 ? (
+                        <div style={{ padding: "10px 14px", fontSize: 11, color: "#94a3b8", textAlign: "center" }}>
+                          {capSearch.trim() ? "Sin coincidencias o ya están todas asignadas." : "Empieza a escribir..."}
+                        </div>
+                      ) : (
+                        capsBusquedaResultado.map((cap, idx) => (
+                          <div key={cap.id}
+                            onMouseDown={() => handleAddCapFromSearch(cap)}
+                            style={{
+                              padding: "8px 12px", cursor: "pointer",
+                              borderBottom: idx < capsBusquedaResultado.length - 1 ? "1px solid #f1f5f9" : "none",
+                              transition: "background 0.1s",
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.backgroundColor = "#faf8ff"}
+                            onMouseLeave={e => e.currentTarget.style.backgroundColor = "transparent"}>
+                            <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                              {cap.codigo && (
+                                <span style={{
+                                  fontSize: 10, fontFamily: "monospace", color: "#7c3aed",
+                                  fontWeight: 700, flexShrink: 0,
+                                }}>
+                                  [{cap.codigo}]
+                                </span>
+                              )}
+                              <span style={{ fontSize: 12, color: "#1e1b4b", lineHeight: 1.3 }}>
+                                {cap.nombre}
+                              </span>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                      {capsBusquedaResultado.length === 20 && (
+                        <div style={{
+                          padding: "6px 12px", fontSize: 10, color: "#94a3b8",
+                          textAlign: "center", borderTop: "1px solid #f1f5f9",
+                          backgroundColor: "#fafafa",
+                        }}>
+                          Mostrando 20 resultados — refina la búsqueda
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <p style={{ fontSize: 10, color: "#64748b", margin: "0 0 10px 4px" }}>
+                  💡 Escribe para buscar, click o Enter para agregar
+                </p>
+
+                {/* Lista de caps ya agregadas */}
+                {loadingCaps ? (
+                  <p style={{ fontSize: 11, color: "#94a3b8", textAlign: "center", padding: 12 }}>
+                    Cargando...
+                  </p>
+                ) : capsParaMostrar.length === 0 ? (
+                  <p style={{ fontSize: 11, color: "#94a3b8", textAlign: "center", padding: 12 }}>
+                    Sin capacitaciones asignadas a este puesto.
+                  </p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 240, overflowY: "auto" }}>
+                    {capsParaMostrar.map((c, i) => (
+                      <div key={`${c.cap_id}-${i}`} style={{
+                        display: "flex", justifyContent: "space-between", alignItems: "center",
+                        padding: "8px 12px", backgroundColor: "#fff",
+                        border: c.esNueva ? "1px dashed #10b981" : "1px solid #e5e7eb",
+                        borderRadius: 8,
+                      }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p style={{ margin: 0, fontSize: 12, color: "#1e1b4b", fontWeight: 500 }}>
+                            {c.nombre}
+                          </p>
+                          <p style={{ margin: 0, fontSize: 10, color: "#94a3b8", fontFamily: "monospace" }}>
+                            {c.codigo || "—"} {c.esNueva && <span style={{ color: "#10b981" }}>· nueva (sin guardar)</span>}
+                          </p>
+                        </div>
+                        <button type="button" onClick={() => handleRemoveCapLocal(c)}
+                          style={{
+                            padding: 6, backgroundColor: "#fef2f2", color: "#ef4444",
+                            border: "1px solid #fecaca", borderRadius: 6, cursor: "pointer",
+                          }}>
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <p style={{ fontSize: 10, color: "#64748b", margin: "10px 0 0 0", lineHeight: 1.4 }}>
+                  Al guardar: las capacitaciones nuevas se asignarán automáticamente a todos los empleados de este puesto.
+                  Las que quites se borrarán solo de los empleados que aún no las han completado.
+                </p>
+              </div>
+            )}
+
+            {!editingId && (
+              <div style={{ padding: 10, backgroundColor: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
+                <p style={{ fontSize: 11, color: "#92400e", margin: 0 }}>
+                  💡 Primero crea el puesto. Después podrás editarlo para asignarle capacitaciones.
+                </p>
+              </div>
+            )}
+
             {errorMsg && <ErrorBanner msg={errorMsg} />}
 
             <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
@@ -402,7 +684,7 @@ function ModalShell({ title, children, onClose }) {
       display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
     }}>
       <div style={{
-        backgroundColor: "#fff", borderRadius: 20, width: "100%", maxWidth: 480,
+        backgroundColor: "#fff", borderRadius: 20, width: "100%", maxWidth: 540,
         maxHeight: "90vh", overflowY: "auto",
         boxShadow: "0 24px 48px rgba(0,0,0,0.2)",
       }}>
@@ -450,32 +732,27 @@ const inputStyle = {
   backgroundColor: "#f8fafc", border: "2px solid #e5e7eb",
   borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box",
 };
-
 const searchInput = {
   width: "100%", paddingLeft: 42, paddingRight: 16, paddingTop: 12, paddingBottom: 12,
   backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12,
   fontSize: 14, outline: "none", boxSizing: "border-box",
 };
-
 const btnPrimaryHeader = {
   display: "flex", alignItems: "center", gap: 8, padding: "10px 20px",
   backgroundColor: "#7c3aed", color: "#fff", border: "none", borderRadius: 12,
   fontSize: 14, fontWeight: 500, cursor: "pointer",
   boxShadow: "0 4px 12px rgba(124,58,237,0.25)",
 };
-
 const btnPrimary = {
   flex: 1, padding: 12, fontSize: 14, fontWeight: 600, color: "#fff",
   backgroundColor: "#7c3aed", border: "none", borderRadius: 12,
   cursor: "pointer", boxShadow: "0 4px 14px rgba(124,58,237,0.3)",
 };
-
 const btnCancel = {
   flex: 1, padding: 12, fontSize: 14, fontWeight: 600, color: "#475569",
   border: "2px solid #d1d5db", borderRadius: 12, backgroundColor: "#fff",
   cursor: "pointer",
 };
-
 const btnIcon = (color) => ({
   display: "flex", alignItems: "center", gap: 4,
   padding: "5px 10px", fontSize: 11, fontWeight: 600,

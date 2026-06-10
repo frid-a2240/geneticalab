@@ -10,10 +10,8 @@ import Dashboard from "./components/pages/Dashboard.jsx";
 import Empleados from "./components/pages/Empleados.jsx";
 import Capacitaciones from "./components/pages/Capacitaciones.jsx";
 import Organigrama from "./components/pages/Organigrama.jsx";
-import Asignaciones from "./components/pages/Asignaciones.jsx";
 import Calificaciones from "./components/pages/Calificaciones.jsx";
-import MatrizEmpleado from "./components/pages/MatrizEmpleado.jsx";
-import Evaluacion90 from "./components/pages/Evaluacion90.jsx";
+
 
 export default function App() {
   return (
@@ -37,11 +35,9 @@ export default function App() {
             <Route path="empleados" element={<Empleados />} />
             <Route path="capacitaciones" element={<Capacitaciones />} />
             <Route path="organigrama" element={<Organigrama />} />
-              <Route path="puestos" element={<Puestos />} />
-              <Route path="asignaciones" element={<Asignaciones />} />
-              <Route path="calificaciones" element={<Calificaciones />} />
-              <Route path="matriz" element={<MatrizEmpleado />} />
-              <Route path="evaluacion90" element={<Evaluacion90 />} />
+            <Route path="puestos" element={<Puestos />} />
+            <Route path="calificaciones" element={<Calificaciones />} />
+              
           </Route>
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

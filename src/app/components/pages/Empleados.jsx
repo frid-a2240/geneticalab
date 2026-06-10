@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../../lib/supabaseClient.js";
 import {
   Search, Plus, Briefcase, Calendar, Building2, UserMinus,
-  Filter, X, CheckCircle, AlertCircle, Eye, Edit, RotateCcw
+  Filter, X, AlertCircle, Eye, Edit, RotateCcw
 } from "lucide-react";
 
 const DEPTO_GRADIENTS = {
@@ -24,30 +24,31 @@ export default function Empleados() {
   const [puestos, setPuestos] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterDepto, setFilterDepto] = useState("Todos");
-  const [filterEstatus, setFilterEstatus] = useState("activos"); // activos | bajas | todos
+  const [filterEstatus, setFilterEstatus] = useState("activos");
   const [deptos, setDeptos] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Modales
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [showBajaModal, setShowBajaModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [empSeleccionado, setEmpSeleccionado] = useState(null);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  // Form nuevo empleado
   const [newEmp, setNewEmp] = useState({
-    clave: "",
-    nombre: "",
-    puesto_id: "",
-    depto: "",
+    clave: "", nombre: "", puesto_id: "", depto: "",
     fec_ingreso: new Date().toISOString().split("T")[0],
-    email: "",
-    jefe_directo: "",
+    email: "", jefe_directo: "",
   });
 
-  // Form baja
+  // ====== NUEVO: form de edición ======
+  const [editEmp, setEditEmp] = useState({
+    clave: "", nombre: "", puesto_id: "", depto: "",
+    fec_ingreso: "", email: "", jefe_directo: "",
+    puesto_id_original: null, // para detectar cambio de puesto
+  });
+
   const [bajaData, setBajaData] = useState({
     fec_baja: new Date().toISOString().split("T")[0],
     motivo: "",
@@ -70,35 +71,53 @@ export default function Empleados() {
     setLoading(false);
   }
 
-  // Estadísticas
-  const totalActivos = empleados.filter((e) => e.activo !== false).length;
-  const totalInactivos = empleados.filter((e) => e.activo === false).length;
-  const totalBajas = bajas.length;
+  // ====== NUEVO: helper para asignar caps de un puesto a un empleado ======
+  async function asignarCapsDePuesto(empClave, puestoId) {
+    if (!puestoId) return;
+    // Obtener caps del puesto
+    const { data: capsPuesto, error } = await supabase
+      .from("matriz_puesto")
+      .select("capacitacion_id, capacitaciones(id, nombre, codigo)")
+      .eq("puesto_id", puestoId);
+    if (error || !capsPuesto || capsPuesto.length === 0) return;
 
-  // Filtrado
-  let dataToShow = [];
-  if (filterEstatus === "activos") {
-    dataToShow = empleados.filter((e) => e.activo !== false);
-  } else if (filterEstatus === "bajas") {
-    dataToShow = bajas.map((b) => ({ ...b, es_baja: true }));
-  } else {
-    dataToShow = [
-      ...empleados,
-      ...bajas.map((b) => ({ ...b, es_baja: true })),
-    ];
+    const inserts = capsPuesto.map(c => ({
+      emp_clave: empClave,
+      capacitacion_id: c.capacitacion_id,
+      nombre_capacitacion: c.capacitaciones?.nombre || "Sin nombre",
+      codigo_capacitacion: c.capacitaciones?.codigo || "",
+      completado: false,
+      origen: "puesto",
+      puesto_id_origen: puestoId,
+      activa: true,
+    }));
+    await supabase.from("calificaciones").insert(inserts);
   }
 
-  const filtered = dataToShow.filter((emp) => {
-    const matchSearch = `${emp.nombre} ${emp.clave} ${emp.puesto || ""}`
-      .toLowerCase()
-      .includes(searchTerm.toLowerCase());
-    return matchSearch && (filterDepto === "Todos" || emp.depto === filterDepto);
-  });
+  // ====== NUEVO: helper para manejar cambio de puesto ======
+  async function procesarCambioPuesto(empClave, puestoAnteriorId, puestoNuevoId) {
+    // 1) Borrar las pendientes del puesto anterior (origen='puesto', completado=false)
+    if (puestoAnteriorId) {
+      await supabase.from("calificaciones")
+        .delete()
+        .eq("emp_clave", empClave)
+        .eq("puesto_id_origen", puestoAnteriorId)
+        .eq("origen", "puesto")
+        .eq("completado", false);
 
-  function getInitials(nombre) {
-    if (!nombre) return "?";
-    const parts = nombre.split(" ");
-    return (parts[0]?.[0] || "") + (parts[1]?.[0] || "");
+      // 2) Marcar las completadas del puesto anterior como inactivas (historial)
+      await supabase.from("calificaciones")
+        .update({ activa: false })
+        .eq("emp_clave", empClave)
+        .eq("puesto_id_origen", puestoAnteriorId)
+        .eq("origen", "puesto")
+        .eq("completado", true);
+    }
+
+    // 3) Asignar caps del nuevo puesto
+    if (puestoNuevoId) {
+      await asignarCapsDePuesto(empClave, puestoNuevoId);
+    }
   }
 
   async function handleCreateEmpleado() {
@@ -108,35 +127,16 @@ export default function Empleados() {
       return;
     }
 
-    // Verificar que la clave no exista
     const { data: existe } = await supabase
-      .from("empleados")
-      .select("clave")
-      .eq("clave", newEmp.clave.trim())
-      .maybeSingle();
+      .from("empleados").select("clave").eq("clave", newEmp.clave.trim()).maybeSingle();
+    if (existe) { setErrorMsg("Ya existe un empleado con esa clave."); return; }
 
-    if (existe) {
-      setErrorMsg("Ya existe un empleado con esa clave.");
-      return;
-    }
-
-    // Verificar que no esté en bajas
     const { data: enBaja } = await supabase
-      .from("bajas")
-      .select("clave")
-      .eq("clave", newEmp.clave.trim())
-      .maybeSingle();
-
-    if (enBaja) {
-      setErrorMsg("Esa clave existe como baja. Usa otra clave o reactiva la baja.");
-      return;
-    }
+      .from("bajas").select("clave").eq("clave", newEmp.clave.trim()).maybeSingle();
+    if (enBaja) { setErrorMsg("Esa clave existe como baja. Usa otra clave o reactiva la baja."); return; }
 
     setSaving(true);
-
-    // Buscar el puesto seleccionado para el nombre y depto
     const puestoSel = puestos.find((p) => p.id === parseInt(newEmp.puesto_id));
-
     const payload = {
       clave: newEmp.clave.trim(),
       nombre: newEmp.nombre.trim(),
@@ -150,11 +150,11 @@ export default function Empleados() {
     };
 
     const { error } = await supabase.from("empleados").insert(payload);
+    if (error) { setErrorMsg("Error al crear: " + error.message); setSaving(false); return; }
 
-    if (error) {
-      setErrorMsg("Error al crear: " + error.message);
-      setSaving(false);
-      return;
+    // ====== NUEVO: asignar caps si tiene puesto ======
+    if (puestoSel?.id) {
+      await asignarCapsDePuesto(newEmp.clave.trim(), puestoSel.id);
     }
 
     setShowCreateModal(false);
@@ -167,6 +167,57 @@ export default function Empleados() {
     fetchData();
   }
 
+  // ====== NUEVO: abrir modal de edición ======
+  function openEdit(emp) {
+    setEditEmp({
+      clave: emp.clave,
+      nombre: emp.nombre || "",
+      puesto_id: emp.puesto_id ? String(emp.puesto_id) : "",
+      depto: emp.depto || "",
+      fec_ingreso: emp.fec_ingreso || "",
+      email: emp.email || "",
+      jefe_directo: emp.jefe_directo || "",
+      puesto_id_original: emp.puesto_id || null,
+    });
+    setErrorMsg("");
+    setShowEditModal(true);
+  }
+
+  // ====== NUEVO: guardar edición ======
+  async function handleEditEmpleado() {
+    setErrorMsg("");
+    if (!editEmp.nombre.trim()) { setErrorMsg("El nombre es obligatorio."); return; }
+    setSaving(true);
+
+    const puestoSel = puestos.find(p => p.id === parseInt(editEmp.puesto_id));
+    const nuevoPuestoId = puestoSel?.id || null;
+    const puestoIdOriginal = editEmp.puesto_id_original;
+
+    const payload = {
+      nombre: editEmp.nombre.trim(),
+      puesto: puestoSel?.nombre || "",
+      puesto_id: nuevoPuestoId,
+      depto: puestoSel?.departamento || editEmp.depto || "",
+      fec_ingreso: editEmp.fec_ingreso || null,
+      email: editEmp.email.trim(),
+      jefe_directo: editEmp.jefe_directo.trim(),
+    };
+
+    const { error } = await supabase
+      .from("empleados").update(payload).eq("clave", editEmp.clave);
+
+    if (error) { setErrorMsg("Error al editar: " + error.message); setSaving(false); return; }
+
+    // ====== Si cambió de puesto, procesar caps ======
+    if (puestoIdOriginal !== nuevoPuestoId) {
+      await procesarCambioPuesto(editEmp.clave, puestoIdOriginal, nuevoPuestoId);
+    }
+
+    setShowEditModal(false);
+    setSaving(false);
+    fetchData();
+  }
+
   async function handleDarBaja() {
     if (!empSeleccionado || !bajaData.fec_baja) {
       setErrorMsg("Fecha de baja es obligatoria.");
@@ -175,7 +226,6 @@ export default function Empleados() {
     setSaving(true);
     setErrorMsg("");
 
-    // 1. Copiar a tabla bajas
     const { error: bajaErr } = await supabase.from("bajas").insert({
       clave: empSeleccionado.clave,
       nombre: empSeleccionado.nombre,
@@ -185,22 +235,14 @@ export default function Empleados() {
       fec_baja: bajaData.fec_baja,
     });
 
-    if (bajaErr) {
-      setErrorMsg("Error al registrar baja: " + bajaErr.message);
-      setSaving(false);
-      return;
-    }
+    if (bajaErr) { setErrorMsg("Error al registrar baja: " + bajaErr.message); setSaving(false); return; }
 
-    // 2. Eliminar de empleados (o marcar inactivo). Mejor eliminamos porque ya está en bajas.
     const { error: delErr } = await supabase
-      .from("empleados")
-      .delete()
-      .eq("clave", empSeleccionado.clave);
+      .from("empleados").delete().eq("clave", empSeleccionado.clave);
 
     if (delErr) {
       setErrorMsg("Baja registrada pero error al eliminar de empleados: " + delErr.message);
-      setSaving(false);
-      return;
+      setSaving(false); return;
     }
 
     setShowBajaModal(false);
@@ -214,7 +256,6 @@ export default function Empleados() {
     if (!confirm(`¿Reactivar a ${baja.nombre}? Volverá a la lista de empleados activos.`)) return;
     setSaving(true);
 
-    // 1. Insertar de vuelta a empleados
     const { error: empErr } = await supabase.from("empleados").insert({
       clave: baja.clave,
       nombre: baja.nombre,
@@ -224,24 +265,40 @@ export default function Empleados() {
       activo: true,
     });
 
-    if (empErr) {
-      alert("Error al reactivar: " + empErr.message);
-      setSaving(false);
-      return;
-    }
+    if (empErr) { alert("Error al reactivar: " + empErr.message); setSaving(false); return; }
 
-    // 2. Eliminar de bajas
     await supabase.from("bajas").delete().eq("clave", baja.clave);
-
     setSaving(false);
     fetchData();
   }
 
+  const totalActivos = empleados.filter((e) => e.activo !== false).length;
+  const totalBajas = bajas.length;
+
+  let dataToShow = [];
+  if (filterEstatus === "activos") {
+    dataToShow = empleados.filter((e) => e.activo !== false);
+  } else if (filterEstatus === "bajas") {
+    dataToShow = bajas.map((b) => ({ ...b, es_baja: true }));
+  } else {
+    dataToShow = [...empleados, ...bajas.map((b) => ({ ...b, es_baja: true }))];
+  }
+
+  const filtered = dataToShow.filter((emp) => {
+    const matchSearch = `${emp.nombre} ${emp.clave} ${emp.puesto || ""}`
+      .toLowerCase().includes(searchTerm.toLowerCase());
+    return matchSearch && (filterDepto === "Todos" || emp.depto === filterDepto);
+  });
+
+  function getInitials(nombre) {
+    if (!nombre) return "?";
+    const parts = nombre.split(" ");
+    return (parts[0]?.[0] || "") + (parts[1]?.[0] || "");
+  }
+
   const cardBase = {
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    border: "1px solid #e5e7eb",
-    boxShadow: "0 1px 4px rgba(0,0,0,0.06)"
+    backgroundColor: "#fff", borderRadius: 16,
+    border: "1px solid #e5e7eb", boxShadow: "0 1px 4px rgba(0,0,0,0.06)"
   };
 
   if (loading) {
@@ -263,15 +320,13 @@ export default function Empleados() {
             {totalActivos} activos · {totalBajas} bajas
           </p>
         </div>
-        <button
-          onClick={() => { setErrorMsg(""); setShowCreateModal(true); }}
+        <button onClick={() => { setErrorMsg(""); setShowCreateModal(true); }}
           style={{
             display: "flex", alignItems: "center", gap: 8, padding: "10px 20px",
             backgroundColor: "#7c3aed", color: "#fff", border: "none", borderRadius: 12,
             fontSize: 14, fontWeight: 500, cursor: "pointer",
             boxShadow: "0 4px 12px rgba(124,58,237,0.25)",
-          }}
-        >
+          }}>
           <Plus size={18} /><span>Nuevo Empleado</span>
         </button>
       </div>
@@ -279,26 +334,11 @@ export default function Empleados() {
       {/* Stat Cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
         {[
-          {
-            label: "Empleados Activos", value: totalActivos,
-            bg: "linear-gradient(135deg, #10b981, #059669)",
-            shadow: "0 6px 20px rgba(16,185,129,0.3)",
-          },
-          {
-            label: "Bajas Registradas", value: totalBajas,
-            bg: "linear-gradient(135deg, #ef4444, #dc2626)",
-            shadow: "0 6px 20px rgba(239,68,68,0.3)",
-          },
-          {
-            label: "Total Histórico", value: totalActivos + totalBajas,
-            bg: "linear-gradient(135deg, #7c3aed, #5b21b6)",
-            shadow: "0 6px 20px rgba(124,58,237,0.3)",
-          },
+          { label: "Empleados Activos", value: totalActivos, bg: "linear-gradient(135deg, #10b981, #059669)", shadow: "0 6px 20px rgba(16,185,129,0.3)" },
+          { label: "Bajas Registradas", value: totalBajas, bg: "linear-gradient(135deg, #ef4444, #dc2626)", shadow: "0 6px 20px rgba(239,68,68,0.3)" },
+          { label: "Total Histórico", value: totalActivos + totalBajas, bg: "linear-gradient(135deg, #7c3aed, #5b21b6)", shadow: "0 6px 20px rgba(124,58,237,0.3)" },
         ].map((s, i) => (
-          <div key={i} style={{
-            borderRadius: 14, padding: "20px 24px",
-            background: s.bg, color: "#fff", boxShadow: s.shadow,
-          }}>
+          <div key={i} style={{ borderRadius: 14, padding: "20px 24px", background: s.bg, color: "#fff", boxShadow: s.shadow }}>
             <p style={{ fontSize: 12, fontWeight: 500, color: "rgba(255,255,255,0.75)", margin: 0 }}>{s.label}</p>
             <p style={{ fontSize: 32, fontWeight: 800, margin: "6px 0 0 0", lineHeight: 1 }}>{s.value}</p>
           </div>
@@ -307,23 +347,18 @@ export default function Empleados() {
 
       {/* Filters */}
       <div style={{ ...cardBase, padding: 20 }}>
-        {/* Search */}
         <div style={{ position: "relative", marginBottom: 16 }}>
           <Search size={18} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }} />
-          <input
-            type="text" placeholder="Buscar por nombre, clave o puesto..."
+          <input type="text" placeholder="Buscar por nombre, clave o puesto..."
             value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
             style={{
               width: "100%", paddingLeft: 42, paddingRight: 16, paddingTop: 12, paddingBottom: 12,
               backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12,
               fontSize: 14, outline: "none", boxSizing: "border-box",
-            }}
-          />
+            }} />
         </div>
 
-        {/* Filter Row */}
         <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-          {/* Estatus pills */}
           <div style={{ display: "flex", gap: 8 }}>
             {[
               { key: "activos", label: "Activos", count: totalActivos },
@@ -350,7 +385,6 @@ export default function Empleados() {
 
           <div style={{ width: 1, height: 28, backgroundColor: "#e5e7eb" }} />
 
-          {/* Departamento */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Filter size={15} color="#94a3b8" />
             <select value={filterDepto} onChange={(e) => setFilterDepto(e.target.value)}
@@ -376,25 +410,12 @@ export default function Empleados() {
             <div key={emp.clave} style={{
               ...cardBase, overflow: "hidden",
               transition: "transform 0.2s, box-shadow 0.2s",
-              cursor: "default",
-              opacity: esBaja ? 0.85 : 1,
-              position: "relative",
+              opacity: esBaja ? 0.85 : 1, position: "relative",
             }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = "translateY(-3px)";
-                e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.1)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = "translateY(0)";
-                e.currentTarget.style.boxShadow = "0 1px 4px rgba(0,0,0,0.06)";
-              }}
-            >
-              {/* Header */}
-              <div style={{
-                height: 56,
-                background: esBaja ? "linear-gradient(135deg, #94a3b8, #64748b)" : gradient,
-                position: "relative",
-              }}>
+              onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.1)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 1px 4px rgba(0,0,0,0.06)"; }}>
+
+              <div style={{ height: 56, background: esBaja ? "linear-gradient(135deg, #94a3b8, #64748b)" : gradient, position: "relative" }}>
                 <span style={{
                   position: "absolute", top: 10, right: 12, fontSize: 10, fontFamily: "monospace",
                   fontWeight: 600, color: "rgba(255,255,255,0.85)",
@@ -404,14 +425,12 @@ export default function Empleados() {
                 {esBaja && (
                   <span style={{
                     position: "absolute", top: 10, left: 12, fontSize: 10,
-                    fontWeight: 700, color: "#fff",
-                    backgroundColor: "#ef4444",
+                    fontWeight: 700, color: "#fff", backgroundColor: "#ef4444",
                     padding: "3px 10px", borderRadius: 6,
                   }}>BAJA</span>
                 )}
               </div>
 
-              {/* Avatar + Content */}
               <div style={{ padding: "0 20px 16px 20px", position: "relative" }}>
                 <div style={{
                   width: 48, height: 48, backgroundColor: "#fff", borderRadius: 14,
@@ -422,17 +441,11 @@ export default function Empleados() {
                   <span style={{
                     fontSize: 14, fontWeight: 700,
                     background: esBaja ? "linear-gradient(135deg, #94a3b8, #64748b)" : gradient,
-                    WebkitBackgroundClip: "text",
-                    WebkitTextFillColor: "transparent"
-                  }}>
-                    {getInitials(emp.nombre)}
-                  </span>
+                    WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent"
+                  }}>{getInitials(emp.nombre)}</span>
                 </div>
 
-                <h3 style={{
-                  fontSize: 15, fontWeight: 700, color: "#1e1b4b",
-                  margin: "0 0 14px 0", lineHeight: 1.3,
-                }}>
+                <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1e1b4b", margin: "0 0 14px 0", lineHeight: 1.3 }}>
                   {emp.nombre}
                 </h3>
 
@@ -440,63 +453,65 @@ export default function Empleados() {
                   {[
                     { icon: Briefcase, text: emp.puesto || "Sin puesto" },
                     { icon: Building2, text: emp.depto || "Sin depto" },
-                    { icon: Calendar, text: esBaja
-                        ? `Baja: ${emp.fec_baja || "—"}`
-                        : `Ingreso: ${emp.fec_ingreso || "—"}` },
+                    { icon: Calendar, text: esBaja ? `Baja: ${emp.fec_baja || "—"}` : `Ingreso: ${emp.fec_ingreso || "—"}` },
                   ].map((item, i) => (
                     <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#475569" }}>
                       <item.icon size={13} color="#94a3b8" style={{ flexShrink: 0 }} />
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {item.text}
-                      </span>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.text}</span>
                     </div>
                   ))}
                 </div>
 
-                {/* Action Buttons */}
                 <div style={{ display: "flex", gap: 6, marginTop: 14, paddingTop: 12, borderTop: "1px solid #f1f5f9" }}>
-                  <button
-                    onClick={() => { setEmpSeleccionado(emp); setShowDetailModal(true); }}
+                  <button onClick={() => { setEmpSeleccionado(emp); setShowDetailModal(true); }}
                     style={{
                       flex: 1, padding: "6px 8px",
                       backgroundColor: "#f5f3ff", color: "#7c3aed",
                       border: "1px solid #e9e5ff", borderRadius: 8,
                       fontSize: 11, fontWeight: 600, cursor: "pointer",
                       display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                    }}
-                  >
+                    }}>
                     <Eye size={12} />Ver
                   </button>
+
+                  {!esBaja && (
+                    <button onClick={() => openEdit(emp)}
+                      style={{
+                        flex: 1, padding: "6px 8px",
+                        backgroundColor: "#eff6ff", color: "#2563eb",
+                        border: "1px solid #bfdbfe", borderRadius: 8,
+                        fontSize: 11, fontWeight: 600, cursor: "pointer",
+                        display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                      }}>
+                      <Edit size={12} />Editar
+                    </button>
+                  )}
+
                   {esBaja ? (
-                    <button
-                      onClick={() => handleReactivar(emp)}
-                      disabled={saving}
+                    <button onClick={() => handleReactivar(emp)} disabled={saving}
                       style={{
                         flex: 1, padding: "6px 8px",
                         backgroundColor: "#ecfdf5", color: "#047857",
                         border: "1px solid #a7f3d0", borderRadius: 8,
                         fontSize: 11, fontWeight: 600, cursor: "pointer",
                         display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                      }}
-                    >
+                      }}>
                       <RotateCcw size={12} />Reactivar
                     </button>
                   ) : (
-                    <button
-                      onClick={() => {
-                        setEmpSeleccionado(emp);
-                        setBajaData({ fec_baja: new Date().toISOString().split("T")[0], motivo: "" });
-                        setErrorMsg("");
-                        setShowBajaModal(true);
-                      }}
+                    <button onClick={() => {
+                      setEmpSeleccionado(emp);
+                      setBajaData({ fec_baja: new Date().toISOString().split("T")[0], motivo: "" });
+                      setErrorMsg("");
+                      setShowBajaModal(true);
+                    }}
                       style={{
                         flex: 1, padding: "6px 8px",
                         backgroundColor: "#fef2f2", color: "#b91c1c",
                         border: "1px solid #fecaca", borderRadius: 8,
                         fontSize: 11, fontWeight: 600, cursor: "pointer",
                         display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                      }}
-                    >
+                      }}>
                       <UserMinus size={12} />Baja
                     </button>
                   )}
@@ -540,9 +555,9 @@ export default function Empleados() {
                   <option key={p.id} value={p.id}>{p.nombre} — {p.departamento}</option>
                 ))}
               </select>
-              {puestos.length === 0 && (
-                <p style={{ fontSize: 11, color: "#f59e0b", marginTop: 6 }}>
-                  No hay puestos registrados. Créalos en la sección "Puestos".
+              {newEmp.puesto_id && (
+                <p style={{ fontSize: 11, color: "#10b981", marginTop: 6 }}>
+                  ✓ Se asignarán automáticamente las capacitaciones de este puesto.
                 </p>
               )}
             </Field>
@@ -578,6 +593,77 @@ export default function Empleados() {
         </ModalShell>
       )}
 
+      {/* ====== MODAL EDITAR EMPLEADO ====== */}
+      {showEditModal && (
+        <ModalShell title="Editar Empleado" onClose={() => setShowEditModal(false)}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ padding: 10, backgroundColor: "#f5f3ff", borderRadius: 8, border: "1px solid #e9e5ff" }}>
+              <p style={{ fontSize: 11, color: "#5b21b6", margin: 0, fontFamily: "monospace" }}>
+                Clave: <b>{editEmp.clave}</b> (no editable)
+              </p>
+            </div>
+
+            <Field label="Nombre completo *">
+              <input type="text" value={editEmp.nombre}
+                onChange={(e) => setEditEmp({ ...editEmp, nombre: e.target.value })}
+                style={inputStyle} />
+            </Field>
+
+            <Field label="Puesto">
+              <select value={editEmp.puesto_id}
+                onChange={(e) => setEditEmp({ ...editEmp, puesto_id: e.target.value })}
+                style={inputStyle}>
+                <option value="">Sin puesto</option>
+                {puestos.map((p) => (
+                  <option key={p.id} value={p.id}>{p.nombre} — {p.departamento}</option>
+                ))}
+              </select>
+              {parseInt(editEmp.puesto_id) !== (editEmp.puesto_id_original || 0) && (
+                <p style={{ fontSize: 11, color: "#f59e0b", marginTop: 6, lineHeight: 1.4 }}>
+                  ⚠ Estás cambiando el puesto. Las capacitaciones pendientes del puesto anterior se borrarán,
+                  las completadas pasarán a historial, y se asignarán las del nuevo puesto.
+                </p>
+              )}
+            </Field>
+
+            <Field label="Departamento (manual, si no hay puesto)">
+              <input type="text" value={editEmp.depto}
+                onChange={(e) => setEditEmp({ ...editEmp, depto: e.target.value })}
+                placeholder="Solo si no tiene puesto asignado"
+                style={inputStyle} />
+            </Field>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <Field label="Fecha de ingreso">
+                <input type="date" value={editEmp.fec_ingreso}
+                  onChange={(e) => setEditEmp({ ...editEmp, fec_ingreso: e.target.value })}
+                  style={inputStyle} />
+              </Field>
+              <Field label="Jefe directo">
+                <input type="text" value={editEmp.jefe_directo}
+                  onChange={(e) => setEditEmp({ ...editEmp, jefe_directo: e.target.value })}
+                  style={inputStyle} />
+              </Field>
+            </div>
+
+            <Field label="Email">
+              <input type="email" value={editEmp.email}
+                onChange={(e) => setEditEmp({ ...editEmp, email: e.target.value })}
+                style={inputStyle} />
+            </Field>
+
+            {errorMsg && <ErrorBanner msg={errorMsg} />}
+
+            <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
+              <button onClick={() => setShowEditModal(false)} style={btnCancel}>Cancelar</button>
+              <button onClick={handleEditEmpleado} disabled={saving} style={btnPrimary}>
+                {saving ? "Guardando..." : "Guardar Cambios"}
+              </button>
+            </div>
+          </div>
+        </ModalShell>
+      )}
+
       {/* ====== MODAL BAJA ====== */}
       {showBajaModal && empSeleccionado && (
         <ModalShell title="Dar de Baja" onClose={() => setShowBajaModal(false)}>
@@ -585,9 +671,7 @@ export default function Empleados() {
             padding: 14, backgroundColor: "#fef2f2", borderRadius: 12,
             border: "1px solid #fecaca", marginBottom: 14,
           }}>
-            <p style={{ fontSize: 13, color: "#7f1d1d", margin: 0 }}>
-              Estás a punto de dar de baja a:
-            </p>
+            <p style={{ fontSize: 13, color: "#7f1d1d", margin: 0 }}>Estás a punto de dar de baja a:</p>
             <p style={{ fontSize: 15, fontWeight: 700, color: "#7f1d1d", margin: "6px 0 0 0" }}>
               {empSeleccionado.nombre} ({empSeleccionado.clave})
             </p>
@@ -637,8 +721,7 @@ export default function Empleados() {
             {empSeleccionado.email && <DetailRow label="Email" value={empSeleccionado.email} />}
             {empSeleccionado.jefe_directo && <DetailRow label="Jefe directo" value={empSeleccionado.jefe_directo} />}
           </div>
-          <button onClick={() => setShowDetailModal(false)}
-            style={{ ...btnCancel, width: "100%", marginTop: 16 }}>
+          <button onClick={() => setShowDetailModal(false)} style={{ ...btnCancel, width: "100%", marginTop: 16 }}>
             Cerrar
           </button>
         </ModalShell>
@@ -668,9 +751,7 @@ function ModalShell({ title, children, onClose }) {
           borderRadius: "20px 20px 0 0",
         }}>
           <h3 style={{ fontWeight: 700, color: "#1e1b4b", margin: 0, fontSize: 18 }}>{title}</h3>
-          <button onClick={onClose} style={{
-            padding: 6, border: "none", background: "none", cursor: "pointer", borderRadius: 8,
-          }}>
+          <button onClick={onClose} style={{ padding: 6, border: "none", background: "none", cursor: "pointer", borderRadius: 8 }}>
             <X size={20} color="#94a3b8" />
           </button>
         </div>
@@ -695,16 +776,13 @@ function DetailRow({ label, value, mono = false, highlight = false }) {
   return (
     <div style={{
       display: "flex", justifyContent: "space-between", alignItems: "center",
-      padding: "10px 14px",
-      backgroundColor: highlight ? "#fef2f2" : "#f8fafc",
-      borderRadius: 10,
-      border: highlight ? "1px solid #fecaca" : "1px solid #e5e7eb",
+      padding: "10px 14px", backgroundColor: highlight ? "#fef2f2" : "#f8fafc",
+      borderRadius: 10, border: highlight ? "1px solid #fecaca" : "1px solid #e5e7eb",
     }}>
       <span style={{ fontSize: 12, color: "#64748b", fontWeight: 500 }}>{label}</span>
       <span style={{
         fontSize: 13, color: highlight ? "#7f1d1d" : "#1e1b4b",
-        fontWeight: 600,
-        fontFamily: mono ? "monospace" : "inherit",
+        fontWeight: 600, fontFamily: mono ? "monospace" : "inherit",
       }}>{value || "—"}</span>
     </div>
   );
@@ -724,14 +802,9 @@ function ErrorBanner({ msg }) {
 }
 
 const inputStyle = {
-  width: "100%",
-  padding: "10px 12px",
-  backgroundColor: "#f8fafc",
-  border: "2px solid #e5e7eb",
-  borderRadius: 10,
-  fontSize: 13,
-  outline: "none",
-  boxSizing: "border-box",
+  width: "100%", padding: "10px 12px",
+  backgroundColor: "#f8fafc", border: "2px solid #e5e7eb",
+  borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box",
 };
 
 const btnCancel = {

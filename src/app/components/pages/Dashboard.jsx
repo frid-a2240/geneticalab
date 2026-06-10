@@ -16,6 +16,7 @@ export default function Dashboard() {
   const [porEstado, setPorEstado] = useState([]);
   const [recientes, setRecientes] = useState([]);
   const [loading, setLoading] = useState(true);
+  
 
   useEffect(() => { fetchDashboard(); }, []);
 

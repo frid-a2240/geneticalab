@@ -12,10 +12,8 @@ import {
   X,
   LogOut,
   Briefcase,
-  ClipboardList,
   Award,
-  LayoutGrid,
-  Clock,
+  
 } from "lucide-react";
 
 import { useAuth } from "../AuthContext.jsx";
@@ -27,10 +25,8 @@ const menuItems = [
   { path: "/puestos",        label: "Puestos",        icon: Briefcase },
   { path: "/capacitaciones", label: "Capacitaciones", icon: BookCheck },
   { path: "/organigrama",    label: "Organigrama",    icon: Network },
-  { path: "/asignaciones",   label: "Asignaciones",   icon: ClipboardList },
   { path: "/calificaciones", label: "Calificaciones", icon: Award },
-  { path: "/matriz",         label: "Matriz",         icon: LayoutGrid },
-  { path: "/evaluacion90", label: "Eval. 90 Días", icon: Clock },
+  
 ];
  
 
