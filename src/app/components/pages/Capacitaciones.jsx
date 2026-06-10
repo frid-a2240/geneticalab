@@ -1,9 +1,9 @@
 // src/components/pages/Capacitaciones.jsx
 import { useState } from "react";
 import { BookOpen, User, ClipboardList } from "lucide-react";
-import TabLista from "./capacitaciones/TabLista.jsx";
-import TabPorEmpleado from "./capacitaciones/TabPorEmpleado.jsx";
-import TabPendientes from "./capacitaciones/TabPendientes.jsx";
+import TabLista from "./Capacitaciones/TabLista.jsx";
+import TabPorEmpleado from "./Capacitaciones/TabPorEmpleado.jsx";
+import TabPendientes from "./Capacitaciones/TabPendientes.jsx";
 
 const TABS = [
   { id: "lista", label: "Catálogo", icon: BookOpen },
