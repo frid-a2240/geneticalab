@@ -1,398 +1,547 @@
 // src/components/pages/Calificaciones.jsx
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabaseClient.js";
 import {
-  Search, Award, Calendar, Building2, Hash,
-  BookOpen, CheckCircle2, Clock, TrendingUp,
-  ChevronDown, X, AlertCircle, User, Briefcase,
+  Search, Award, Calendar, Building2, Hash, Briefcase,
+  X, AlertCircle, Filter, Plus, ArrowLeft, Save,
 } from "lucide-react";
 
-const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+const PERIODOS = [
+  { key: "90dias", label: "90 días",     entrega: "fecha_entrega_90dias", real: "fecha_real_90dias" },
+  { key: "2025",   label: "Anual 2025",  entrega: "entrega_2025",         real: "fecha_real_2025" },
+  { key: "2026",   label: "Anual 2026",  entrega: "entrega_2026",         real: "fecha_real_2026" },
+  { key: "2027",   label: "Anual 2027",  entrega: "entrega_2027",         real: "fecha_real_2027" },
+];
+
+const DIAS_AVISO = 30;
+
+// Estatus de una fecha de entrega: E (entregada) / P (próxima a vencer) / V (vencida) / null (sin dato/vigente)
+function calcularEstatus(entregaISO, realISO) {
+  if (realISO) return "E";
+  if (!entregaISO) return null;
+  const hoy = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00");
+  const entrega = new Date(entregaISO + "T00:00:00");
+  const diffDias = Math.round((entrega - hoy) / 86400000);
+  if (diffDias < 0) return "V";
+  if (diffDias <= DIAS_AVISO) return "P";
+  return null;
+}
+
+const ESTATUS_INFO = {
+  E: { label: "Entregada",        color: "#10b981", bg: "#ecfdf5", border: "#a7f3d0" },
+  P: { label: "Próxima a Vencer", color: "#f59e0b", bg: "#fffbeb", border: "#fde68a" },
+  V: { label: "Vencida",          color: "#ef4444", bg: "#fef2f2", border: "#fecaca" },
+};
+
+function EstatusBadge({ estatus }) {
+  if (!estatus) return <span style={{ fontSize: 12, color: "#cbd5e1" }}>—</span>;
+  const info = ESTATUS_INFO[estatus];
+  return (
+    <span style={{
+      display: "inline-block", fontSize: 11, fontWeight: 700, padding: "3px 10px",
+      borderRadius: 999, backgroundColor: info.bg, color: info.color,
+      border: `1px solid ${info.border}`,
+    }}>
+      {info.label}
+    </span>
+  );
+}
 
 function fmtDate(d) {
   if (!d) return "—";
-  try {
-    const dt = new Date(d + "T12:00:00");
-    return `${String(dt.getDate()).padStart(2,'0')}-${MESES[dt.getMonth()]}-${String(dt.getFullYear()).slice(2)}`;
-  } catch { return d; }
-}
-
-function califColor(c) {
-  if (c === null || c === undefined || c === "") return { color:"#94a3b8", bg:"#f8fafc", label:"—" };
-  const s = String(c).toLowerCase();
-  if (s.includes("cumple") || s.includes("satisf")) return { color:"#10b981", bg:"#ecfdf5", label: String(c) };
-  const n = parseFloat(c);
-  if (isNaN(n)) return { color:"#64748b", bg:"#f8fafc", label: String(c) };
-  if (n >= 9)  return { color:"#10b981", bg:"#ecfdf5", label: n % 1 === 0 ? String(n) : n.toFixed(1) };
-  if (n >= 8)  return { color:"#3b82f6", bg:"#eff6ff", label: n.toFixed(1) };
-  if (n >= 7)  return { color:"#f59e0b", bg:"#fffbeb", label: n.toFixed(1) };
-  return         { color:"#ef4444", bg:"#fef2f2", label: n.toFixed(1) };
+  return d;
 }
 
 export default function Calificaciones() {
-  const [empleados, setEmpleados] = useState([]);
-  const [query, setQuery]         = useState("");
-  const [showDrop, setShowDrop]   = useState(false);
-  const [empSel, setEmpSel]       = useState(null);
-  const [caps, setCaps]           = useState([]);
-  const [loading, setLoading]     = useState(false);
-  const [filterAno, setFilterAno] = useState("Todos");
-  const inputRef = useRef(null);
-  const [editando, setEditando]   = useState(null);
-  const [editCalif, setEditCalif] = useState("");
-  const [editCapac, setEditCapac] = useState("");
-  const [editFecha, setEditFecha] = useState("");
-  const [saving, setSaving]       = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const empParam = searchParams.get("emp");
+
+  const [filas, setFilas] = useState([]); // empleados + calificaciones join
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [filterDepto, setFilterDepto] = useState("Todos");
+  const [filterEstatus, setFilterEstatus] = useState("Todos");
+  const [empSel, setEmpSel] = useState(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const [form, setForm] = useState({});
+
+  useEffect(() => { cargar(); }, []);
 
   useEffect(() => {
-    supabase.from("empleados")
-      .select("clave, nombre, puesto, depto, fec_ingreso, jefe_directo")
-      .eq("activo", true).order("nombre")
-      .then(({ data }) => setEmpleados(data || []));
-  }, []);
+    if (empParam && filas.length > 0) {
+      const f = filas.find((r) => r.clave === empParam);
+      if (f) abrirDetalle(f);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [empParam, filas]);
 
-  const empFiltrados = useMemo(() => {
-    if (!query.trim()) return empleados.slice(0, 8);
-    const q = query.toLowerCase();
-    return empleados.filter(e =>
-      e.nombre.toLowerCase().includes(q) || e.clave.toLowerCase().includes(q)
-    ).slice(0, 10);
-  }, [empleados, query]);
-
-  async function seleccionar(emp) {
-    setEmpSel(emp);
-    setQuery(emp.nombre);
-    setShowDrop(false);
-    setFilterAno("Todos");
-    setEditando(null);
+  async function cargar() {
     setLoading(true);
-    const { data } = await supabase
-      .from("matriz_empleado")
-      .select("*")
-      .eq("emp_clave", emp.clave)
-      .eq("cap_eliminada", false)
-      .order("fecha_capacitacion", { ascending: true });
-    setCaps(data || []);
+    const { data: empleados } = await supabase
+      .from("empleados")
+      .select("clave, nombre, puesto, depto, fec_ingreso, fec_cambio_puesto")
+      .order("nombre");
+    const { data: califs } = await supabase.from("calificaciones").select("*");
+
+    const califByClave = new Map((califs || []).map((c) => [c.emp_clave, c]));
+    const combinado = (empleados || []).map((e) => ({
+      ...e,
+      calif: califByClave.get(e.clave) || null,
+    }));
+    setFilas(combinado);
     setLoading(false);
   }
 
-  function limpiar() {
-    setEmpSel(null); setQuery(""); setCaps([]);
-    setFilterAno("Todos"); setEditando(null);
-    setTimeout(() => inputRef.current?.focus(), 50);
-  }
+  const deptos = useMemo(
+    () => [...new Set(filas.map((f) => f.depto).filter(Boolean))].sort(),
+    [filas]
+  );
 
-  const anos = useMemo(() => {
-    const set = new Set(caps.map(c => c.ano).filter(Boolean));
-    return ["Todos", ...Array.from(set).sort((a, b) => b - a)];
-  }, [caps]);
-
-  const capsFiltradas = useMemo(() =>
-    filterAno === "Todos" ? caps : caps.filter(c => String(c.ano) === String(filterAno))
-  , [caps, filterAno]);
-
-  const porAno = useMemo(() => {
-    const map = {};
-    capsFiltradas.forEach(c => {
-      const a = c.ano || c.fecha_capacitacion?.slice(0, 4) || "—";
-      if (!map[a]) map[a] = [];
-      map[a].push(c);
+  const filasConEstatus = useMemo(() => {
+    return filas.map((f) => {
+      const estatusPorPeriodo = PERIODOS.map((p) =>
+        calcularEstatus(f.calif?.[p.entrega] || null, f.calif?.[p.real] || null)
+      );
+      const peor = estatusPorPeriodo.includes("V") ? "V" : estatusPorPeriodo.includes("P") ? "P" : null;
+      return { ...f, estatusPorPeriodo, peor };
     });
-    return map;
-  }, [capsFiltradas]);
+  }, [filas]);
 
-  const stats = useMemo(() => {
-    const nums = caps.map(c => c.calificacion_numerica).filter(n => n !== null && n !== undefined);
-    return {
-      total:       caps.length,
-      completadas: caps.filter(c => c.completado).length,
-      pendientes:  caps.filter(c => !c.completado).length,
-      promedio:    nums.length ? (nums.reduce((a,b) => a+b,0)/nums.length).toFixed(1) : "—",
-    };
-  }, [caps]);
+  const filtrados = useMemo(() => {
+    return filasConEstatus.filter((f) => {
+      const matchQuery = `${f.nombre} ${f.clave} ${f.puesto || ""}`.toLowerCase().includes(query.toLowerCase());
+      const matchDepto = filterDepto === "Todos" || f.depto === filterDepto;
+      const matchEstatus =
+        filterEstatus === "Todos" ||
+        (filterEstatus === "vencidas" && f.peor === "V") ||
+        (filterEstatus === "proximas" && f.peor === "P") ||
+        (filterEstatus === "al_dia" && !f.peor);
+      return matchQuery && matchDepto && matchEstatus;
+    });
+  }, [filasConEstatus, query, filterDepto, filterEstatus]);
 
-  async function guardarCalif(id) {
-    setSaving(true);
-    const payload = {};
-    const n = parseFloat(editCalif);
-    if (!isNaN(n) && editCalif !== "") payload.calificacion_numerica = n;
-    else if (editCalif.toLowerCase() === "cumple") payload.cumple = true;
-    else if (editCalif.toLowerCase() === "no cumple") payload.cumple = false;
-    if (editCapac) payload.responsable_capacitacion = editCapac;
-    if (editFecha) payload.fecha_capacitacion = editFecha;
-    if (Object.keys(payload).length > 0) payload.completado = true;
-    await supabase.from("matriz_empleado").update(payload).eq("id", id);
-    setSaving(false);
-    setEditando(null);
-    const { data } = await supabase.from("matriz_empleado").select("*")
-      .eq("emp_clave", empSel.clave).eq("cap_eliminada", false)
-      .order("fecha_capacitacion", { ascending: true });
-    setCaps(data || []);
+  const stats = useMemo(() => ({
+    total: filasConEstatus.length,
+    vencidas: filasConEstatus.filter((f) => f.peor === "V").length,
+    proximas: filasConEstatus.filter((f) => f.peor === "P").length,
+  }), [filasConEstatus]);
+
+  function abrirDetalle(f) {
+    setEmpSel(f);
+    setForm({
+      cierre_matriz: f.calif?.cierre_matriz || "",
+      fecha_entrega_90dias: f.calif?.fecha_entrega_90dias || "",
+      fecha_real_90dias: f.calif?.fecha_real_90dias || "",
+      entrega_2025: f.calif?.entrega_2025 || "",
+      fecha_real_2025: f.calif?.fecha_real_2025 || "",
+      entrega_2026: f.calif?.entrega_2026 || "",
+      fecha_real_2026: f.calif?.fecha_real_2026 || "",
+      entrega_2027: f.calif?.entrega_2027 || "",
+      fecha_real_2027: f.calif?.fecha_real_2027 || "",
+      observaciones: f.calif?.observaciones || "",
+      rh: f.calif?.rh || "",
+    });
   }
 
-  const cardBase = { backgroundColor:"#fff", borderRadius:16, border:"1px solid #e5e7eb", boxShadow:"0 1px 4px rgba(0,0,0,0.06)" };
+  function cerrarDetalle() {
+    setEmpSel(null);
+    setForm({});
+    if (empParam) {
+      searchParams.delete("emp");
+      setSearchParams(searchParams);
+    }
+  }
+
+  async function guardarDetalle() {
+    setSaving(true);
+    const payload = { ...form };
+    Object.keys(payload).forEach((k) => { if (payload[k] === "") payload[k] = null; });
+    payload.updated_at = new Date().toISOString();
+
+    const { error } = await supabase
+      .from("calificaciones")
+      .upsert({ emp_clave: empSel.clave, ...payload }, { onConflict: "emp_clave" });
+
+    setSaving(false);
+    if (error) { setErrorMsg("Error al guardar: " + error.message); return; }
+    await cargar();
+    cerrarDetalle();
+  }
+
+  const cardBase = { backgroundColor: "#fff", borderRadius: 16, border: "1px solid #e5e7eb", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" };
+
+  if (loading) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 300 }}>
+        <div style={{ width: 36, height: 36, border: "3px solid #7c3aed", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  if (empSel) {
+    return (
+      <DetalleEmpleado
+        emp={empSel} form={form} setForm={setForm}
+        onBack={cerrarDetalle} onSave={guardarDetalle}
+        saving={saving} errorMsg={errorMsg}
+        cardBase={cardBase}
+      />
+    );
+  }
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", gap:24 }}>
-      <div>
-        <h1 style={{ fontSize:24, fontWeight:700, color:"#1e1b4b", margin:0 }}>Calificaciones</h1>
-        <p style={{ fontSize:14, color:"#64748b", marginTop:4 }}>Historial de capacitaciones por empleado</p>
-      </div>
-
-      {/* Buscador */}
-      <div style={{ ...cardBase, padding:20 }}>
-        <label style={{ fontSize:12, fontWeight:600, color:"#475569", display:"block", marginBottom:8 }}>
-          Buscar empleado por nombre o clave
-        </label>
-        <div style={{ position:"relative" }}>
-          <Search size={17} style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", color:"#94a3b8", zIndex:1 }} />
-          <input ref={inputRef} type="text"
-            placeholder="Escribe nombre o número de empleado..."
-            value={query}
-            onChange={e => { setQuery(e.target.value); setShowDrop(true); if (empSel) { setEmpSel(null); setCaps([]); } }}
-            onFocus={() => setShowDrop(true)}
-            style={{
-              width:"100%", paddingLeft:42, paddingRight: empSel ? 40 : 16,
-              paddingTop:12, paddingBottom:12,
-              backgroundColor:"#f8fafc",
-              border:"2px solid " + (empSel ? "#7c3aed" : "#e5e7eb"),
-              borderRadius:12, fontSize:14, outline:"none", boxSizing:"border-box",
-            }}
-          />
-          {empSel && (
-            <button onClick={limpiar} style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", border:"none", background:"none", cursor:"pointer", padding:4 }}>
-              <X size={16} color="#94a3b8" />
-            </button>
-          )}
-          {showDrop && !empSel && empFiltrados.length > 0 && (
-            <div style={{
-              position:"absolute", top:"calc(100% + 6px)", left:0, right:0, zIndex:50,
-              backgroundColor:"#fff", borderRadius:12, border:"1px solid #e5e7eb",
-              boxShadow:"0 8px 24px rgba(0,0,0,0.1)", overflow:"hidden", maxHeight:280, overflowY:"auto",
-            }}>
-              {empFiltrados.map(e => (
-                <div key={e.clave} onMouseDown={() => seleccionar(e)}
-                  style={{ padding:"10px 16px", cursor:"pointer", display:"flex", alignItems:"center", gap:12, borderBottom:"1px solid #f1f5f9" }}
-                  onMouseEnter={el => el.currentTarget.style.backgroundColor = "#faf8ff"}
-                  onMouseLeave={el => el.currentTarget.style.backgroundColor = "transparent"}
-                >
-                  <div style={{
-                    width:34, height:34, borderRadius:10, flexShrink:0,
-                    background:"linear-gradient(135deg,#7c3aed,#5b21b6)",
-                    display:"flex", alignItems:"center", justifyContent:"center",
-                    color:"#fff", fontSize:11, fontWeight:700,
-                  }}>
-                    {e.nombre.split(" ").slice(0,2).map(w => w[0]).join("")}
-                  </div>
-                  <div>
-                    <p style={{ fontSize:13, fontWeight:600, color:"#1e1b4b", margin:0 }}>{e.nombre}</p>
-                    <p style={{ fontSize:11, color:"#94a3b8", margin:0 }}>{e.clave} · {e.puesto}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: "#1e1b4b", margin: 0 }}>Calificaciones</h1>
+          <p style={{ fontSize: 14, color: "#64748b", marginTop: 4 }}>Control de vencimientos de calificaciones por empleado</p>
         </div>
+        <button onClick={() => { setErrorMsg(""); setShowAddModal(true); }}
+          style={{
+            display: "flex", alignItems: "center", gap: 8, padding: "10px 20px",
+            backgroundColor: "#7c3aed", color: "#fff", border: "none", borderRadius: 12,
+            fontSize: 14, fontWeight: 500, cursor: "pointer", boxShadow: "0 4px 12px rgba(124,58,237,0.25)",
+          }}>
+          <Plus size={18} /><span>Agregar empleado</span>
+        </button>
       </div>
 
-      {/* Ficha empleado */}
-      {empSel && (
-        <div style={{ ...cardBase, overflow:"hidden" }}>
-          <div style={{ height:6, background:"linear-gradient(90deg,#7c3aed,#ec4899)" }} />
-          <div style={{ padding:20, display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
-            <div style={{
-              width:50, height:50, borderRadius:14, flexShrink:0,
-              background:"linear-gradient(135deg,#7c3aed,#5b21b6)",
-              display:"flex", alignItems:"center", justifyContent:"center",
-              color:"#fff", fontSize:16, fontWeight:800,
-            }}>
-              {empSel.nombre.split(" ").slice(0,2).map(w => w[0]).join("")}
-            </div>
-            <div style={{ flex:1, minWidth:180 }}>
-              <h2 style={{ fontSize:16, fontWeight:800, color:"#1e1b4b", margin:0 }}>{empSel.nombre}</h2>
-              <div style={{ display:"flex", gap:14, flexWrap:"wrap", marginTop:6 }}>
-                {[
-                  { icon:Hash,      text: empSel.clave },
-                  { icon:Briefcase, text: empSel.puesto || "—" },
-                  { icon:Building2, text: empSel.depto || "—" },
-                  { icon:Calendar,  text: `Ingreso: ${empSel.fec_ingreso || "—"}` },
-                ].map((item, i) => (
-                  <div key={i} style={{ display:"flex", alignItems:"center", gap:4 }}>
-                    <item.icon size={12} color="#94a3b8" />
-                    <span style={{ fontSize:12, color:"#475569" }}>{item.text}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div style={{ display:"flex", gap:16 }}>
-              {[
-                { label:"Total",       value:stats.total,       color:"#7c3aed" },
-                { label:"Completadas", value:stats.completadas, color:"#10b981" },
-                { label:"Pendientes",  value:stats.pendientes,  color:"#f59e0b" },
-                { label:"Promedio",    value:stats.promedio,    color:"#3b82f6" },
-              ].map((s,i) => (
-                <div key={i} style={{ textAlign:"center" }}>
-                  <p style={{ fontSize:20, fontWeight:800, color:s.color, margin:0, lineHeight:1 }}>{s.value}</p>
-                  <p style={{ fontSize:10, color:"#94a3b8", margin:"3px 0 0" }}>{s.label}</p>
-                </div>
-              ))}
-            </div>
+      {/* Stat cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+        {[
+          { label: "Total Empleados",   value: stats.total,    bg: "linear-gradient(135deg, #7c3aed, #5b21b6)" },
+          { label: "Vencidas",          value: stats.vencidas, bg: "linear-gradient(135deg, #ef4444, #dc2626)" },
+          { label: "Próximas a Vencer", value: stats.proximas, bg: "linear-gradient(135deg, #f59e0b, #d97706)" },
+        ].map((s, i) => (
+          <div key={i} style={{ borderRadius: 14, padding: "20px 24px", background: s.bg, color: "#fff", boxShadow: "0 6px 20px rgba(0,0,0,0.15)" }}>
+            <p style={{ fontSize: 12, fontWeight: 500, color: "rgba(255,255,255,0.75)", margin: 0 }}>{s.label}</p>
+            <p style={{ fontSize: 32, fontWeight: 800, margin: "6px 0 0 0", lineHeight: 1 }}>{s.value}</p>
           </div>
-        </div>
-      )}
+        ))}
+      </div>
 
-      {/* Filtro año */}
-      {empSel && !loading && caps.length > 0 && (
-        <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-          <span style={{ fontSize:12, color:"#94a3b8", fontWeight:600 }}>Año:</span>
-          {anos.map(a => (
-            <button key={a} onClick={() => setFilterAno(a)} style={{
-              padding:"6px 14px", borderRadius:8, fontSize:12, fontWeight:600, cursor:"pointer",
-              border: filterAno === a ? "2px solid #7c3aed" : "2px solid #e5e7eb",
-              backgroundColor: filterAno === a ? "#7c3aed" : "#fff",
-              color: filterAno === a ? "#fff" : "#475569",
-            }}>{a === "Todos" ? "Todos" : a}</button>
-          ))}
-          <span style={{ fontSize:12, color:"#94a3b8", marginLeft:"auto" }}>{capsFiltradas.length} capacitaciones</span>
+      {/* Filtros */}
+      <div style={{ ...cardBase, padding: 20 }}>
+        <div style={{ position: "relative", marginBottom: 16 }}>
+          <Search size={18} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }} />
+          <input type="text" placeholder="Buscar por nombre, clave o puesto..."
+            value={query} onChange={(e) => setQuery(e.target.value)}
+            style={{
+              width: "100%", paddingLeft: 42, paddingRight: 16, paddingTop: 12, paddingBottom: 12,
+              backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12,
+              fontSize: 14, outline: "none", boxSizing: "border-box",
+            }} />
         </div>
-      )}
 
-      {/* Loading */}
-      {loading && (
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:160 }}>
-          <div style={{ width:32, height:32, border:"3px solid #7c3aed", borderTopColor:"transparent", borderRadius:"50%", animation:"spin 1s linear infinite" }} />
-          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-        </div>
-      )}
+        <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            {[
+              { key: "Todos", label: "Todos" },
+              { key: "vencidas", label: "Vencidas" },
+              { key: "proximas", label: "Próx. a Vencer" },
+              { key: "al_dia", label: "Al día" },
+            ].map((est) => (
+              <button key={est.key} onClick={() => setFilterEstatus(est.key)} style={{
+                padding: "8px 14px", borderRadius: 10, fontSize: 12, fontWeight: 600,
+                border: filterEstatus === est.key ? "2px solid #7c3aed" : "2px solid #e5e7eb",
+                backgroundColor: filterEstatus === est.key ? "#7c3aed" : "#fff",
+                color: filterEstatus === est.key ? "#fff" : "#475569",
+                cursor: "pointer",
+              }}>{est.label}</button>
+            ))}
+          </div>
 
-      {/* Tablas por año */}
-      {empSel && !loading && capsFiltradas.length > 0 && (
-        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-          {Object.keys(porAno).sort((a,b) => b - a).map(ano => {
-            const listAno = porAno[ano];
-            const nums = listAno.map(c => c.calificacion_numerica).filter(n => n !== null && n !== undefined);
-            const promAno = nums.length ? (nums.reduce((a,b) => a+b,0)/nums.length).toFixed(1) : "—";
-            return (
-              <div key={ano} style={{ ...cardBase, overflow:"hidden" }}>
-                <div style={{ padding:"12px 20px", background:"linear-gradient(135deg,#7c3aed,#5b21b6)", display:"flex", alignItems:"center", gap:10 }}>
-                  <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>{ano}</span>
-                  <span style={{ fontSize:11, fontWeight:600, color:"#fff", backgroundColor:"rgba(255,255,255,0.2)", padding:"2px 10px", borderRadius:999 }}>
-                    {listAno.length} caps
-                  </span>
-                  <span style={{ fontSize:11, fontWeight:600, color:"#fff", backgroundColor:"rgba(255,255,255,0.2)", padding:"2px 10px", borderRadius:999 }}>
-                    Prom: {promAno}
-                  </span>
-                </div>
-                <div style={{ overflowX:"auto" }}>
-                  <table style={{ width:"100%", borderCollapse:"collapse", minWidth:700 }}>
-                    <thead>
-                      <tr style={{ backgroundColor:"#f8fafc" }}>
-                        {["#","Fecha","Folio","Nombre de la Capacitación","Calificación","Responsable",""].map(h => (
-                          <th key={h} style={tableTh}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {listAno.map((cap, idx) => {
-                        const editMode = editando === cap.id;
-                        const califVal = cap.calificacion_numerica ?? (
-                          cap.cumple !== null && cap.cumple !== undefined ? (cap.cumple ? "Cumple" : "No Cumple") :
-                          cap.satisfactorio !== null && cap.satisfactorio !== undefined ? (cap.satisfactorio ? "Satisfactorio" : "No Satisfactorio") : null
-                        );
-                        const cs = califColor(califVal);
-                        return (
-                          <tr key={cap.id}
-                            style={{ borderBottom:"1px solid #f1f5f9", backgroundColor: editMode ? "#faf8ff" : "transparent" }}
-                            onMouseEnter={e => { if (!editMode) e.currentTarget.style.backgroundColor = "#faf8ff"; }}
-                            onMouseLeave={e => { if (!editMode) e.currentTarget.style.backgroundColor = "transparent"; }}
-                          >
-                            <td style={{ ...tableTd, fontSize:11, color:"#94a3b8", textAlign:"center", width:36 }}>{idx+1}</td>
-                            <td style={{ ...tableTd, whiteSpace:"nowrap", fontSize:12 }}>
-                              {editMode
-                                ? <input type="date" value={editFecha} onChange={e => setEditFecha(e.target.value)} style={{ ...inputSmall, width:130 }} />
-                                : <span style={{ color:"#64748b" }}>{fmtDate(cap.fecha_capacitacion || cap.fecha_asignacion)}</span>
-                              }
-                            </td>
-                            <td style={{ ...tableTd, fontFamily:"monospace", fontSize:11, color:"#7c3aed", whiteSpace:"nowrap" }}>
-                              {cap.codigo_cap_snap || "—"}
-                            </td>
-                            <td style={{ ...tableTd, maxWidth:320 }}>
-                              <p style={{ fontSize:13, color:"#1e1b4b", margin:0, fontWeight:500, lineHeight:1.3 }}>{cap.nombre_cap_snap}</p>
-                              {!cap.completado && <span style={{ fontSize:10, color:"#f59e0b", fontWeight:600 }}>⏳ Pendiente</span>}
-                            </td>
-                            <td style={{ ...tableTd, textAlign:"center", whiteSpace:"nowrap" }}>
-                              {editMode
-                                ? <input type="text" value={editCalif} onChange={e => setEditCalif(e.target.value)} placeholder="0-10" style={{ ...inputSmall, width:80 }} />
-                                : <span style={{ display:"inline-block", fontSize:13, fontWeight:800, padding:"3px 12px", borderRadius:8, backgroundColor:cs.bg, color:cs.color, minWidth:40 }}>{cs.label}</span>
-                              }
-                            </td>
-                            <td style={{ ...tableTd, fontSize:12, color:"#64748b", whiteSpace:"nowrap" }}>
-                              {editMode
-                                ? <input type="text" value={editCapac} onChange={e => setEditCapac(e.target.value)} placeholder="Capacitador" style={{ ...inputSmall, width:120 }} />
-                                : cap.responsable_capacitacion || "—"
-                              }
-                            </td>
-                            <td style={{ ...tableTd, whiteSpace:"nowrap" }}>
-                              {editMode ? (
-                                <div style={{ display:"flex", gap:6 }}>
-                                  <button onClick={() => guardarCalif(cap.id)} disabled={saving}
-                                    style={{ ...btnSmall, backgroundColor:"#ecfdf5", color:"#10b981", border:"1px solid #a7f3d0" }}>
-                                    {saving ? "…" : "✓"}
-                                  </button>
-                                  <button onClick={() => setEditando(null)}
-                                    style={{ ...btnSmall, backgroundColor:"#f8fafc", color:"#94a3b8", border:"1px solid #e2e8f0" }}>
-                                    ✕
-                                  </button>
-                                </div>
-                              ) : (
-                                <button onClick={() => {
-                                  setEditando(cap.id);
-                                  setEditCalif(cap.calificacion_numerica !== null && cap.calificacion_numerica !== undefined ? String(cap.calificacion_numerica) : "");
-                                  setEditCapac(cap.responsable_capacitacion || "");
-                                  setEditFecha(cap.fecha_capacitacion || "");
-                                }} style={{ ...btnSmall, backgroundColor:"#f5f3ff", color:"#7c3aed", border:"1px solid #e9e5ff" }}>
-                                  Editar
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+          <div style={{ width: 1, height: 28, backgroundColor: "#e5e7eb" }} />
 
-      {empSel && !loading && caps.length === 0 && (
-        <div style={{ ...cardBase, padding:"48px 0", textAlign:"center", color:"#94a3b8" }}>
-          <Award size={44} style={{ margin:"0 auto 12px", opacity:0.25 }} />
-          <p style={{ fontSize:14, margin:0 }}>Este empleado no tiene capacitaciones registradas.</p>
-        </div>
-      )}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Filter size={15} color="#94a3b8" />
+            <select value={filterDepto} onChange={(e) => setFilterDepto(e.target.value)}
+              style={{
+                fontSize: 13, backgroundColor: "#f8fafc", border: "2px solid #e5e7eb",
+                borderRadius: 10, padding: "8px 14px", outline: "none", cursor: "pointer",
+                fontWeight: 500, color: "#475569",
+              }}>
+              <option value="Todos">Todos los departamentos</option>
+              {deptos.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
 
-      {!empSel && !loading && (
-        <div style={{ ...cardBase, padding:"56px 0", textAlign:"center", color:"#94a3b8" }}>
-          <Search size={44} style={{ margin:"0 auto 14px", opacity:0.2 }} />
-          <p style={{ fontSize:15, fontWeight:600, color:"#475569", margin:"0 0 6px 0" }}>Busca un empleado para ver sus calificaciones</p>
-          <p style={{ fontSize:13, margin:0 }}>Escribe el nombre o número de clave en el buscador</p>
+          <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: "auto" }}>{filtrados.length} de {filas.length}</span>
         </div>
+      </div>
+
+      {/* Tabla */}
+      <div style={{ ...cardBase, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+            <thead>
+              <tr style={{ backgroundColor: "#f8fafc" }}>
+                {["Empleado", "Puesto", "Depto", "90 días", "2025", "2026", "2027"].map((h) => (
+                  <th key={h} style={tableTh}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.map((f) => (
+                <tr key={f.clave} onClick={() => abrirDetalle(f)}
+                  style={{ borderBottom: "1px solid #f1f5f9", cursor: "pointer" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#faf8ff")}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}>
+                  <td style={tableTd}>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: "#1e1b4b", margin: 0 }}>{f.nombre}</p>
+                    <p style={{ fontSize: 11, color: "#94a3b8", margin: 0, fontFamily: "monospace" }}>{f.clave}</p>
+                  </td>
+                  <td style={{ ...tableTd, fontSize: 12, color: "#475569" }}>{f.puesto || "—"}</td>
+                  <td style={{ ...tableTd, fontSize: 12, color: "#475569" }}>{f.depto || "—"}</td>
+                  {f.estatusPorPeriodo.map((estatus, i) => (
+                    <td key={i} style={tableTd}><EstatusBadge estatus={estatus} /></td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {filtrados.length === 0 && (
+          <div style={{ textAlign: "center", padding: "48px 0", color: "#94a3b8" }}>
+            <Award size={40} style={{ margin: "0 auto 12px", opacity: 0.3 }} />
+            <p style={{ fontSize: 14 }}>No se encontraron empleados.</p>
+          </div>
+        )}
+      </div>
+
+      {showAddModal && (
+        <AgregarEmpleadoModal
+          onClose={() => setShowAddModal(false)}
+          onCreated={async () => { setShowAddModal(false); await cargar(); }}
+        />
       )}
     </div>
   );
 }
 
+function DetalleEmpleado({ emp, form, setForm, onBack, onSave, saving, errorMsg, cardBase }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <button onClick={onBack} style={{
+        display: "flex", alignItems: "center", gap: 6, alignSelf: "flex-start",
+        padding: "8px 14px", backgroundColor: "#fff", border: "1px solid #e5e7eb",
+        borderRadius: 10, fontSize: 13, fontWeight: 600, color: "#475569", cursor: "pointer",
+      }}>
+        <ArrowLeft size={15} /> Volver a la lista
+      </button>
+
+      <div style={{ ...cardBase, overflow: "hidden" }}>
+        <div style={{ height: 6, background: "linear-gradient(90deg,#7c3aed,#ec4899)" }} />
+        <div style={{ padding: 20, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+          <div style={{
+            width: 50, height: 50, borderRadius: 14, flexShrink: 0,
+            background: "linear-gradient(135deg,#7c3aed,#5b21b6)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            color: "#fff", fontSize: 16, fontWeight: 800,
+          }}>
+            {emp.nombre.split(" ").slice(0, 2).map((w) => w[0]).join("")}
+          </div>
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 800, color: "#1e1b4b", margin: 0 }}>{emp.nombre}</h2>
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 6 }}>
+              {[
+                { icon: Hash, text: emp.clave },
+                { icon: Briefcase, text: emp.puesto || "—" },
+                { icon: Building2, text: emp.depto || "—" },
+                { icon: Calendar, text: `Ingreso: ${emp.fec_ingreso || "—"}` },
+              ].map((item, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <item.icon size={12} color="#94a3b8" />
+                  <span style={{ fontSize: 12, color: "#475569" }}>{item.text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ ...cardBase, padding: 20 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1e1b4b", margin: "0 0 16px 0" }}>Cierre de matriz</h3>
+        <Field label="Cierre de matriz">
+          <input type="date" value={form.cierre_matriz || ""}
+            onChange={(e) => setForm({ ...form, cierre_matriz: e.target.value })} style={inputStyle} />
+        </Field>
+      </div>
+
+      {PERIODOS.map((p) => {
+        const estatus = calcularEstatus(form[p.entrega] || null, form[p.real] || null);
+        return (
+          <div key={p.key} style={{ ...cardBase, padding: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1e1b4b", margin: 0 }}>{p.label}</h3>
+              <EstatusBadge estatus={estatus} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <Field label="Fecha de entrega">
+                <input type="date" value={form[p.entrega] || ""}
+                  onChange={(e) => setForm({ ...form, [p.entrega]: e.target.value })} style={inputStyle} />
+              </Field>
+              <Field label="Fecha real de entrega">
+                <input type="date" value={form[p.real] || ""}
+                  onChange={(e) => setForm({ ...form, [p.real]: e.target.value })} style={inputStyle} />
+              </Field>
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{ ...cardBase, padding: 20 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1e1b4b", margin: "0 0 16px 0" }}>Observaciones</h3>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Field label="Observaciones">
+            <textarea value={form.observaciones || ""} rows={3}
+              onChange={(e) => setForm({ ...form, observaciones: e.target.value })}
+              style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+          </Field>
+          <Field label="RH">
+            <input type="text" value={form.rh || ""}
+              onChange={(e) => setForm({ ...form, rh: e.target.value })} style={inputStyle} />
+          </Field>
+        </div>
+      </div>
+
+      {errorMsg && <ErrorBanner msg={errorMsg} />}
+
+      <div style={{ display: "flex", gap: 12 }}>
+        <button onClick={onBack} style={btnCancel}>Cancelar</button>
+        <button onClick={onSave} disabled={saving} style={btnPrimary}>
+          <Save size={15} style={{ marginRight: 6, verticalAlign: "middle" }} />
+          {saving ? "Guardando..." : "Guardar cambios"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AgregarEmpleadoModal({ onClose, onCreated }) {
+  const [nuevo, setNuevo] = useState({
+    clave: "", nombre: "", puesto: "", depto: "",
+    fec_ingreso: new Date().toISOString().split("T")[0],
+  });
+  const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  async function crear() {
+    setErrorMsg("");
+    if (!nuevo.clave.trim() || !nuevo.nombre.trim()) {
+      setErrorMsg("Clave y nombre son obligatorios.");
+      return;
+    }
+    setSaving(true);
+
+    const { data: existe } = await supabase.from("empleados").select("clave").eq("clave", nuevo.clave.trim()).maybeSingle();
+    if (existe) { setErrorMsg("Ya existe un empleado con esa clave."); setSaving(false); return; }
+
+    const { error } = await supabase.from("empleados").insert({
+      clave: nuevo.clave.trim(),
+      nombre: nuevo.nombre.trim(),
+      puesto: nuevo.puesto.trim(),
+      depto: nuevo.depto.trim(),
+      fec_ingreso: nuevo.fec_ingreso || null,
+      activo: true,
+    });
+    if (error) { setErrorMsg("Error al crear: " + error.message); setSaving(false); return; }
+
+    await supabase.from("calificaciones").insert({ emp_clave: nuevo.clave.trim() });
+    setSaving(false);
+    onCreated();
+  }
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)",
+      backdropFilter: "blur(4px)", zIndex: 50,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+    }}>
+      <div style={{ backgroundColor: "#fff", borderRadius: 20, width: "100%", maxWidth: 460, boxShadow: "0 24px 48px rgba(0,0,0,0.2)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 24px", borderBottom: "1px solid #e5e7eb" }}>
+          <h3 style={{ fontWeight: 700, color: "#1e1b4b", margin: 0, fontSize: 18 }}>Agregar Empleado</h3>
+          <button onClick={onClose} style={{ padding: 6, border: "none", background: "none", cursor: "pointer", borderRadius: 8 }}>
+            <X size={20} color="#94a3b8" />
+          </button>
+        </div>
+        <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
+            <Field label="Clave *">
+              <input type="text" value={nuevo.clave} onChange={(e) => setNuevo({ ...nuevo, clave: e.target.value })} placeholder="Ej: 100753" style={inputStyle} />
+            </Field>
+            <Field label="Nombre completo *">
+              <input type="text" value={nuevo.nombre} onChange={(e) => setNuevo({ ...nuevo, nombre: e.target.value })} placeholder="Apellido Apellido, Nombre" style={inputStyle} />
+            </Field>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label="Puesto">
+              <input type="text" value={nuevo.puesto} onChange={(e) => setNuevo({ ...nuevo, puesto: e.target.value })} style={inputStyle} />
+            </Field>
+            <Field label="Departamento">
+              <input type="text" value={nuevo.depto} onChange={(e) => setNuevo({ ...nuevo, depto: e.target.value })} style={inputStyle} />
+            </Field>
+          </div>
+          <Field label="Fecha de ingreso">
+            <input type="date" value={nuevo.fec_ingreso} onChange={(e) => setNuevo({ ...nuevo, fec_ingreso: e.target.value })} style={inputStyle} />
+          </Field>
+
+          {errorMsg && <ErrorBanner msg={errorMsg} />}
+
+          <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
+            <button onClick={onClose} style={btnCancel}>Cancelar</button>
+            <button onClick={crear} disabled={saving} style={btnPrimary}>{saving ? "Guardando..." : "Crear Empleado"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div>
+      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 6 }}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function ErrorBanner({ msg }) {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 8, padding: "10px 14px",
+      backgroundColor: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10,
+      color: "#b91c1c", fontSize: 12, fontWeight: 500,
+    }}>
+      <AlertCircle size={14} />{msg}
+    </div>
+  );
+}
+
 const tableTh = {
-  padding:"11px 14px", textAlign:"left", fontSize:11, fontWeight:700,
-  color:"#64748b", textTransform:"uppercase", letterSpacing:"0.04em",
-  borderBottom:"2px solid #e5e7eb", whiteSpace:"nowrap",
+  padding: "11px 14px", textAlign: "left", fontSize: 11, fontWeight: 700,
+  color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em",
+  borderBottom: "2px solid #e5e7eb", whiteSpace: "nowrap",
 };
-const tableTd = { padding:"11px 14px", fontSize:13, color:"#475569", verticalAlign:"middle" };
-const inputSmall = {
-  padding:"6px 10px", backgroundColor:"#f8fafc", border:"2px solid #7c3aed",
-  borderRadius:8, fontSize:12, outline:"none", boxSizing:"border-box",
+const tableTd = { padding: "11px 14px", fontSize: 13, color: "#475569", verticalAlign: "middle" };
+const inputStyle = {
+  width: "100%", padding: "10px 12px", backgroundColor: "#f8fafc",
+  border: "2px solid #e5e7eb", borderRadius: 10, fontSize: 13,
+  outline: "none", boxSizing: "border-box",
 };
-const btnSmall = { padding:"5px 10px", borderRadius:7, cursor:"pointer", fontSize:12, fontWeight:600 };
+const btnCancel = {
+  flex: 1, padding: 12, fontSize: 14, fontWeight: 600, color: "#475569",
+  border: "2px solid #d1d5db", borderRadius: 12, backgroundColor: "#fff", cursor: "pointer",
+};
+const btnPrimary = {
+  flex: 1, padding: 12, fontSize: 14, fontWeight: 600, color: "#fff",
+  backgroundColor: "#7c3aed", border: "none", borderRadius: 12,
+  cursor: "pointer", boxShadow: "0 4px 14px rgba(124,58,237,0.3)",
+};

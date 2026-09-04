@@ -1,32 +1,22 @@
 import { useState } from "react";
 import { Outlet, NavLink } from "react-router-dom";
 import {
-  User,
-  LayoutDashboard,
   Users,
-  BookCheck,
   Network,
   ChevronLeft,
   ChevronRight,
   Menu,
   X,
   LogOut,
-  Briefcase,
   Award,
-  
 } from "lucide-react";
 
 import { useAuth } from "../AuthContext.jsx";
 
 const menuItems = [
-  { path: "/perfil",         label: "Mi Perfil",      icon: User },
-  { path: "/dashboard",      label: "Dashboard",      icon: LayoutDashboard },
   { path: "/empleados",      label: "Empleados",      icon: Users },
-  { path: "/puestos",        label: "Puestos",        icon: Briefcase },
-  { path: "/capacitaciones", label: "Capacitaciones", icon: BookCheck },
   { path: "/organigrama",    label: "Organigrama",    icon: Network },
   { path: "/calificaciones", label: "Calificaciones", icon: Award },
-  
 ];
  
 
