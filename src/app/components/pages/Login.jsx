@@ -29,7 +29,7 @@ export default function Login() {
 
     if (result.success) {
       setUser(result.user);
-      navigate("/dashboard", { replace: true });
+      navigate("/calificaciones", { replace: true });
     } else {
       setError(result.error);
     }

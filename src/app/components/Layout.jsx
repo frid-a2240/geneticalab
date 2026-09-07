@@ -15,8 +15,8 @@ import { useAuth } from "../AuthContext.jsx";
 
 const menuItems = [
   { path: "/empleados",      label: "Empleados",      icon: Users },
-  { path: "/organigrama",    label: "Organigrama",    icon: Network },
   { path: "/calificaciones", label: "Calificaciones", icon: Award },
+  { path: "/organigrama",    label: "Organigrama",    icon: Network },
 ];
  
 
@@ -367,11 +367,11 @@ export default function Layout() {
         <div
           style={{
             padding: "24px 32px",
-            maxWidth: 1400,
+            maxWidth: isCollapsed ? "none" : 1400,
             margin: "0 auto",
           }}
         >
-          <Outlet />
+          <Outlet context={{ isCollapsed, setIsCollapsed }} />
         </div>
       </main>
 
