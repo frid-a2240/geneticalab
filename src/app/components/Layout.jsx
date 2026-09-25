@@ -9,13 +9,16 @@ import {
   X,
   LogOut,
   Award,
+  CalendarDays,
 } from "lucide-react";
 
 import { useAuth } from "../AuthContext.jsx";
+import NotificacionesBell from "./NotificacionesBell.jsx";
 
 const menuItems = [
   { path: "/empleados",      label: "Empleados",      icon: Users },
   { path: "/calificaciones", label: "Calificaciones", icon: Award },
+  { path: "/calendario",     label: "Calendario",     icon: CalendarDays },
   { path: "/organigrama",    label: "Organigrama",    icon: Network },
 ];
  
@@ -371,6 +374,9 @@ export default function Layout() {
             margin: "0 auto",
           }}
         >
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+            <NotificacionesBell />
+          </div>
           <Outlet context={{ isCollapsed, setIsCollapsed }} />
         </div>
       </main>

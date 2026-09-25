@@ -6,33 +6,7 @@ import {
   Search, Award, Calendar, Building2, Hash, Briefcase,
   X, AlertCircle, Filter, Plus, ArrowLeft, Save,
 } from "lucide-react";
-
-const PERIODOS = [
-  { key: "90dias", label: "90 días",     entrega: "fecha_entrega_90dias", real: "fecha_real_90dias" },
-  { key: "2025",   label: "Anual 2025",  entrega: "entrega_2025",         real: "fecha_real_2025" },
-  { key: "2026",   label: "Anual 2026",  entrega: "entrega_2026",         real: "fecha_real_2026" },
-  { key: "2027",   label: "Anual 2027",  entrega: "entrega_2027",         real: "fecha_real_2027" },
-];
-
-const DIAS_AVISO = 30;
-
-// Estatus de una fecha de entrega: E (entregada) / P (próxima a vencer) / V (vencida) / null (sin dato/vigente)
-function calcularEstatus(entregaISO, realISO) {
-  if (realISO) return "E";
-  if (!entregaISO) return null;
-  const hoy = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00");
-  const entrega = new Date(entregaISO + "T00:00:00");
-  const diffDias = Math.round((entrega - hoy) / 86400000);
-  if (diffDias < 0) return "V";
-  if (diffDias <= DIAS_AVISO) return "P";
-  return null;
-}
-
-const ESTATUS_INFO = {
-  E: { label: "Entregada",        color: "#10b981", bg: "#ecfdf5", border: "#a7f3d0" },
-  P: { label: "Próxima a Vencer", color: "#f59e0b", bg: "#fffbeb", border: "#fde68a" },
-  V: { label: "Vencida",          color: "#ef4444", bg: "#fef2f2", border: "#fecaca" },
-};
+import { PERIODOS, calcularEstatus, ESTATUS_INFO } from "../../../lib/calificaciones.js";
 
 function EstatusBadge({ estatus }) {
   if (!estatus) return <span style={{ fontSize: 12, color: "#cbd5e1" }}>—</span>;

@@ -7,6 +7,7 @@ import Login from "./components/pages/Login.jsx";
 import Empleados from "./components/pages/Empleados.jsx";
 import Organigrama from "./components/pages/Organigrama.jsx";
 import Calificaciones from "./components/pages/Calificaciones.jsx";
+import Calendario from "./components/pages/Calendario.jsx";
 
 
 export default function App() {
@@ -29,6 +30,7 @@ export default function App() {
             <Route path="empleados" element={<Empleados />} />
             <Route path="organigrama" element={<Organigrama />} />
             <Route path="calificaciones" element={<Calificaciones />} />
+            <Route path="calendario" element={<Calendario />} />
 
           </Route>
 
